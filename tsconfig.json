@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    // Environment setup & latest features
+    "types": [
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-pool-workers",
+      "vitest/globals"
+    ],
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleDetection": "force",
+    "allowJs": true,
+
+    // Bundler mode
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+
+    // Path aliases
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
+    // Best practices
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+
+    // Some stricter flags (disabled by default)
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noPropertyAccessFromIndexSignature": false
+  }
+}
