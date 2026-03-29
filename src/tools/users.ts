@@ -1,86 +1,87 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
 import type { MatrixClient } from "@/matrix/client";
 
-export const registerUserTools = (server: McpServer, client: MatrixClient) => {
-  server.registerTool(
-    "whoami",
-    {
+export const createUserTools = (client: MatrixClient) => ({
+  get_user_profile: createTool({
+    description: "Get the display name of a Matrix user.",
+    execute: async (args) => {
+      const displayname = await client.getDisplayName(args.user_id);
+      return { displayname, user_id: args.user_id };
+    },
+    id: "get_user_profile",
+    inputSchema: z.object({
+      user_id: z
+        .string()
+        .describe("The Matrix user ID (e.g., @user:matrix.org)"),
+    }),
+    mcp: {
       annotations: {
         idempotentHint: true,
         readOnlyHint: true,
       },
-      description: "Get the currently authenticated Matrix user's identity.",
-      inputSchema: {},
-      title: "Who Am I",
     },
-    async () => {
-      const result = await client.whoAmI();
-      return {
-        content: [
-          { text: JSON.stringify(result, null, 2), type: "text" as const },
-        ],
-      };
-    }
-  );
+    outputSchema: z.object({
+      displayname: z.string().nullable(),
+      user_id: z.string(),
+    }),
+  }),
 
-  server.registerTool(
-    "search_users",
-    {
-      annotations: {
-        idempotentHint: true,
-        readOnlyHint: true,
-      },
-      description:
-        "Search the Matrix user directory for people by name or user ID.",
-      inputSchema: {
-        limit: z
-          .number()
-          .optional()
-          .describe("Maximum results to return (default: 10)"),
-        search_term: z.string().describe("Name or user ID to search for"),
-      },
-      title: "Search Users",
-    },
-    async (args) => {
+  search_users: createTool({
+    description:
+      "Search the Matrix user directory for people by name or user ID.",
+    execute: async (args) => {
       const result = await client.searchUserDirectory(
         args.search_term,
         args.limit
       );
-      return {
-        content: [
-          { text: JSON.stringify(result, null, 2), type: "text" as const },
-        ],
-      };
-    }
-  );
-
-  server.registerTool(
-    "get_user_profile",
-    {
+      return result;
+    },
+    id: "search_users",
+    inputSchema: z.object({
+      limit: z
+        .number()
+        .optional()
+        .describe("Maximum results to return (default: 10)"),
+      search_term: z.string().describe("Name or user ID to search for"),
+    }),
+    mcp: {
       annotations: {
         idempotentHint: true,
         readOnlyHint: true,
       },
-      description: "Get the display name of a Matrix user.",
-      inputSchema: {
-        user_id: z
-          .string()
-          .describe("The Matrix user ID (e.g., @user:matrix.org)"),
-      },
-      title: "Get User Profile",
     },
-    async (args) => {
-      const displayname = await client.getDisplayName(args.user_id);
-      return {
-        content: [
-          {
-            text: JSON.stringify({ displayname, user_id: args.user_id }),
-            type: "text" as const,
-          },
-        ],
-      };
-    }
-  );
-};
+    outputSchema: z.object({
+      limited: z.boolean(),
+      results: z.array(
+        z.object({
+          avatar_url: z.string().optional(),
+          display_name: z.string().optional(),
+          user_id: z.string(),
+        })
+      ),
+    }),
+  }),
+
+  whoami: createTool({
+    description: "Get the currently authenticated Matrix user's identity.",
+    execute: async () => {
+      const result = await client.whoAmI();
+      return result;
+    },
+    id: "whoami",
+    inputSchema: z.object({}),
+    mcp: {
+      annotations: {
+        idempotentHint: true,
+        readOnlyHint: true,
+      },
+    },
+    outputSchema: z.object({
+      device_id: z.string(),
+      is_guest: z.boolean(),
+      user_id: z.string(),
+    }),
+  }),
+});

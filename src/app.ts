@@ -1,4 +1,9 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  MCPServer,
+  extractBearerToken,
+  generateProtectedResourceMetadata,
+  generateWWWAuthenticateHeader,
+} from "@mastra/mcp";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -6,18 +11,18 @@ import { cors } from "hono/cors";
 
 import type { AppEnv } from "@/env";
 import { MatrixClient } from "@/matrix/client";
-import { registerAllTools } from "@/tools";
+import { createAllTools } from "@/tools";
 
-export const getServer = (env: AppEnv["Bindings"]) => {
-  const server = new McpServer({
+export const createMCPServer = (env: AppEnv["Bindings"]) => {
+  const client = new MatrixClient(env.MATRIX_BASE_URL, env.MATRIX_ACCESS_TOKEN);
+  const tools = createAllTools(client);
+
+  return new MCPServer({
+    id: "mcp-server-matrix",
     name: "mcp-server-matrix",
+    tools,
     version: "1.0.0",
   });
-
-  const client = new MatrixClient(env.MATRIX_BASE_URL, env.MATRIX_ACCESS_TOKEN);
-  registerAllTools(server, client);
-
-  return server;
 };
 
 export const createApp = () => {
@@ -38,6 +43,26 @@ export const createApp = () => {
     })
   );
 
+  // --- OAuth Protected Resource Metadata (RFC 9728) ---
+  // Uses Mastra's generateProtectedResourceMetadata to serve discovery metadata.
+  app.get("/.well-known/oauth-protected-resource/:path{.*}?", (c) => {
+    const authToken = c.env.MCP_AUTH_TOKEN;
+    if (authToken === undefined || authToken === "") {
+      return c.json({ error: "OAuth not configured" }, 404);
+    }
+
+    const issuer = `${new URL(c.req.url).origin}`;
+    const metadata = generateProtectedResourceMetadata({
+      authorizationServers: [issuer],
+      resource: issuer,
+      resourceName: "Matrix MCP Server",
+      scopesSupported: ["mcp:read", "mcp:write"],
+    });
+    return c.json(metadata);
+  });
+
+  // --- OAuth Token Validation Middleware ---
+  // Uses Mastra's extractBearerToken and generateWWWAuthenticateHeader.
   const authMiddleware = async (
     c: Context<AppEnv>,
     next: () => Promise<void>
@@ -47,20 +72,28 @@ export const createApp = () => {
       await next();
       return;
     }
-    const bearer = c.req.header("Authorization");
-    if (bearer === `Bearer ${authToken}`) {
+
+    const token = extractBearerToken(c.req.header("Authorization") ?? null);
+    if (token === authToken) {
       await next();
       return;
     }
-    return c.json({ error: "Unauthorized" }, 401);
+
+    const { origin } = new URL(c.req.url);
+    return c.json({ error: "Unauthorized" }, 401, {
+      "WWW-Authenticate": generateWWWAuthenticateHeader({
+        resourceMetadataUrl: `${origin}/.well-known/oauth-protected-resource`,
+      }),
+    });
   };
 
   const mcpHandler = async (c: Context<AppEnv>) => {
+    const mcpServer = createMCPServer(c.env);
+    const sdkServer = mcpServer.getServer();
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: true,
     });
-    const server = getServer(c.env);
-    await server.connect(transport);
+    await sdkServer.connect(transport);
     return transport.handleRequest(c.req.raw);
   };
 

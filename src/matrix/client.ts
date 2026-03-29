@@ -1,20 +1,21 @@
-export interface MatrixEvent {
-  content: Record<string, unknown>;
-  event_id: string;
-  origin_server_ts: number;
-  room_id?: string;
-  sender: string;
-  type: string;
-}
+// --- Response types ---
 
-export interface RoomMessagesResponse {
-  chunk: MatrixEvent[];
-  end?: string;
-  start: string;
+export interface WhoAmIResponse {
+  device_id: string;
+  is_guest: boolean;
+  user_id: string;
 }
 
 export interface JoinedRoomsResponse {
   joined_rooms: string[];
+}
+
+export interface RoomNameContent {
+  name: string;
+}
+
+export interface RoomTopicContent {
+  topic: string;
 }
 
 export interface RoomMember {
@@ -31,6 +32,21 @@ export interface RoomMembersResponse {
   chunk: RoomMember[];
 }
 
+export interface MatrixEvent {
+  content: Record<string, unknown>;
+  event_id: string;
+  origin_server_ts: number;
+  room_id?: string;
+  sender: string;
+  type: string;
+}
+
+export interface RoomMessagesResponse {
+  chunk: MatrixEvent[];
+  end?: string;
+  start: string;
+}
+
 export interface UserDirectoryResult {
   avatar_url?: string;
   display_name?: string;
@@ -40,20 +56,6 @@ export interface UserDirectoryResult {
 export interface UserDirectoryResponse {
   limited: boolean;
   results: UserDirectoryResult[];
-}
-
-export interface WhoAmIResponse {
-  device_id: string;
-  is_guest: boolean;
-  user_id: string;
-}
-
-export interface RoomNameContent {
-  name: string;
-}
-
-export interface RoomTopicContent {
-  topic: string;
 }
 
 export interface PublicRoomsChunk {
@@ -71,9 +73,20 @@ export interface PublicRoomsResponse {
   total_room_count_estimate?: number;
 }
 
-export interface SendMessageResponse {
+export interface SendEventResponse {
   event_id: string;
 }
+
+export interface CreateRoomResponse {
+  room_id: string;
+}
+
+export interface ProfileInfoResponse {
+  avatar_url?: string;
+  displayname?: string;
+}
+
+// --- Helpers ---
 
 const sleep = async (ms: number): Promise<void> =>
   // eslint-disable-next-line no-promise-executor-return -- intentional delay
@@ -83,6 +96,8 @@ const sleep = async (ms: number): Promise<void> =>
 
 const roomPath = (roomId: string): string =>
   `/rooms/${encodeURIComponent(roomId)}`;
+
+// --- Client ---
 
 export class MatrixClient {
   private readonly baseUrl: string;
@@ -121,7 +136,7 @@ export class MatrixClient {
     });
 
     if (response.status === 429 && retries > 0) {
-      const retryJson = (await response.json());
+      const retryJson: { retry_after_ms?: number } = await response.json();
       const waitMs = Math.min(retryJson.retry_after_ms ?? 3000, 5000);
       await sleep(waitMs);
       return this.request<T>(method, path, body, query, retries - 1);
@@ -135,12 +150,16 @@ export class MatrixClient {
     return (await response.json()) as T;
   }
 
+  // --- Identity ---
+
   async whoAmI(): Promise<WhoAmIResponse> {
-    return this.request("GET", "/account/whoami");
+    return this.request<WhoAmIResponse>("GET", "/account/whoami");
   }
 
+  // --- Room state ---
+
   async getJoinedRooms(): Promise<JoinedRoomsResponse> {
-    return this.request("GET", "/joined_rooms");
+    return this.request<JoinedRoomsResponse>("GET", "/joined_rooms");
   }
 
   async getRoomName(roomId: string): Promise<string | null> {
@@ -175,8 +194,23 @@ export class MatrixClient {
     if (membership !== undefined && membership !== "") {
       query.membership = membership;
     }
-    return this.request("GET", `${roomPath(roomId)}/members`, undefined, query);
+    return this.request<RoomMembersResponse>(
+      "GET",
+      `${roomPath(roomId)}/members`,
+      undefined,
+      query
+    );
   }
+
+  async setRoomTopic(roomId: string, topic: string): Promise<void> {
+    await this.request<Record<string, never>>(
+      "PUT",
+      `${roomPath(roomId)}/state/m.room.topic`,
+      { topic }
+    );
+  }
+
+  // --- Messages ---
 
   async getRoomMessages(
     roomId: string,
@@ -197,7 +231,7 @@ export class MatrixClient {
     if (options.filter !== undefined && options.filter !== "") {
       query.filter = options.filter;
     }
-    return this.request(
+    return this.request<RoomMessagesResponse>(
       "GET",
       `${roomPath(roomId)}/messages`,
       undefined,
@@ -205,13 +239,26 @@ export class MatrixClient {
     );
   }
 
+  async getLastMessageTimestamp(roomId: string): Promise<number | null> {
+    try {
+      const result = await this.getRoomMessages(roomId, { limit: 1 });
+      const firstEvent = result.chunk[0];
+      if (firstEvent !== undefined) {
+        return firstEvent.origin_server_ts;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   async sendMessage(
     roomId: string,
     body: string,
     msgtype = "m.text"
-  ): Promise<SendMessageResponse> {
+  ): Promise<SendEventResponse> {
     const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    return this.request(
+    return this.request<SendEventResponse>(
       "PUT",
       `${roomPath(roomId)}/send/m.room.message/${txnId}`,
       { body, msgtype }
@@ -222,89 +269,18 @@ export class MatrixClient {
     roomId: string,
     eventId: string,
     reaction: string
-  ): Promise<SendMessageResponse> {
+  ): Promise<SendEventResponse> {
     const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    return this.request("PUT", `${roomPath(roomId)}/send/m.reaction/${txnId}`, {
-      "m.relates_to": {
-        event_id: eventId,
-        key: reaction,
-        rel_type: "m.annotation",
-      },
-    });
-  }
-
-  async searchUserDirectory(
-    searchTerm: string,
-    limit = 10
-  ): Promise<UserDirectoryResponse> {
-    return this.request("POST", "/user_directory/search", {
-      limit,
-      search_term: searchTerm,
-    });
-  }
-
-  async getPublicRooms(
-    options: {
-      limit?: number;
-      searchTerm?: string;
-      since?: string;
-    } = {}
-  ): Promise<PublicRoomsResponse> {
-    if (options.searchTerm !== undefined && options.searchTerm !== "") {
-      return this.request("POST", "/publicRooms", {
-        filter: { generic_search_term: options.searchTerm },
-        limit: options.limit ?? 20,
-        since: options.since,
-      });
-    }
-    const query: Record<string, string> = {
-      limit: String(options.limit ?? 20),
-    };
-    if (options.since !== undefined && options.since !== "") {
-      query.since = options.since;
-    }
-    return this.request("GET", "/publicRooms", undefined, query);
-  }
-
-  async joinRoom(roomIdOrAlias: string): Promise<{ room_id: string }> {
-    return this.request(
-      "POST",
-      `/join/${encodeURIComponent(roomIdOrAlias)}`,
-      {}
-    );
-  }
-
-  async leaveRoom(roomId: string): Promise<void> {
-    await this.request("POST", `${roomPath(roomId)}/leave`, {});
-  }
-
-  async getDisplayName(userId: string): Promise<string | null> {
-    try {
-      const result = await this.request<{ displayname?: string }>(
-        "GET",
-        `/profile/${encodeURIComponent(userId)}/displayname`
-      );
-      return result.displayname ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  async createRoom(options: {
-    invite?: string[];
-    is_direct?: boolean;
-    name?: string;
-    preset?: "private_chat" | "public_chat" | "trusted_private_chat";
-    topic?: string;
-  }): Promise<{ room_id: string }> {
-    return this.request("POST", "/createRoom", options);
-  }
-
-  async sendReadReceipt(roomId: string, eventId: string): Promise<void> {
-    await this.request(
-      "POST",
-      `${roomPath(roomId)}/receipt/m.read/${encodeURIComponent(eventId)}`,
-      {}
+    return this.request<SendEventResponse>(
+      "PUT",
+      `${roomPath(roomId)}/send/m.reaction/${txnId}`,
+      {
+        "m.relates_to": {
+          event_id: eventId,
+          key: reaction,
+          rel_type: "m.annotation",
+        },
+      }
     );
   }
 
@@ -312,9 +288,9 @@ export class MatrixClient {
     roomId: string,
     eventId: string,
     body: string
-  ): Promise<SendMessageResponse> {
+  ): Promise<SendEventResponse> {
     const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    return this.request(
+    return this.request<SendEventResponse>(
       "PUT",
       `${roomPath(roomId)}/send/m.room.message/${txnId}`,
       {
@@ -333,25 +309,112 @@ export class MatrixClient {
     roomId: string,
     eventId: string,
     reason?: string
-  ): Promise<SendMessageResponse> {
+  ): Promise<SendEventResponse> {
     const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const body = reason !== undefined && reason !== "" ? { reason } : {};
-    return this.request(
+    return this.request<SendEventResponse>(
       "PUT",
       `${roomPath(roomId)}/redact/${encodeURIComponent(eventId)}/${txnId}`,
       body
     );
   }
 
-  async inviteUser(roomId: string, userId: string): Promise<void> {
-    await this.request("POST", `${roomPath(roomId)}/invite`, {
-      user_id: userId,
-    });
+  async sendReadReceipt(roomId: string, eventId: string): Promise<void> {
+    await this.request<Record<string, never>>(
+      "POST",
+      `${roomPath(roomId)}/receipt/m.read/${encodeURIComponent(eventId)}`,
+      {}
+    );
   }
 
-  async setRoomTopic(roomId: string, topic: string): Promise<void> {
-    await this.request("PUT", `${roomPath(roomId)}/state/m.room.topic`, {
-      topic,
-    });
+  // --- Room management ---
+
+  async createRoom(options: {
+    invite?: string[];
+    is_direct?: boolean;
+    name?: string;
+    preset?: "private_chat" | "public_chat" | "trusted_private_chat";
+    topic?: string;
+  }): Promise<CreateRoomResponse> {
+    return this.request<CreateRoomResponse>("POST", "/createRoom", options);
+  }
+
+  async joinRoom(roomIdOrAlias: string): Promise<{ room_id: string }> {
+    return this.request<{ room_id: string }>(
+      "POST",
+      `/join/${encodeURIComponent(roomIdOrAlias)}`,
+      {}
+    );
+  }
+
+  async leaveRoom(roomId: string): Promise<void> {
+    await this.request<Record<string, never>>(
+      "POST",
+      `${roomPath(roomId)}/leave`,
+      {}
+    );
+  }
+
+  async inviteUser(roomId: string, userId: string): Promise<void> {
+    await this.request<Record<string, never>>(
+      "POST",
+      `${roomPath(roomId)}/invite`,
+      { user_id: userId }
+    );
+  }
+
+  // --- Users ---
+
+  async getDisplayName(userId: string): Promise<string | null> {
+    try {
+      const result = await this.request<ProfileInfoResponse>(
+        "GET",
+        `/profile/${encodeURIComponent(userId)}/displayname`
+      );
+      return result.displayname ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async searchUserDirectory(
+    searchTerm: string,
+    limit = 10
+  ): Promise<UserDirectoryResponse> {
+    return this.request<UserDirectoryResponse>(
+      "POST",
+      "/user_directory/search",
+      { limit, search_term: searchTerm }
+    );
+  }
+
+  // --- Public rooms ---
+
+  async getPublicRooms(
+    options: {
+      limit?: number;
+      searchTerm?: string;
+      since?: string;
+    } = {}
+  ): Promise<PublicRoomsResponse> {
+    if (options.searchTerm !== undefined && options.searchTerm !== "") {
+      return this.request<PublicRoomsResponse>("POST", "/publicRooms", {
+        filter: { generic_search_term: options.searchTerm },
+        limit: options.limit ?? 20,
+        since: options.since,
+      });
+    }
+    const query: Record<string, string> = {
+      limit: String(options.limit ?? 20),
+    };
+    if (options.since !== undefined && options.since !== "") {
+      query.since = options.since;
+    }
+    return this.request<PublicRoomsResponse>(
+      "GET",
+      "/publicRooms",
+      undefined,
+      query
+    );
   }
 }

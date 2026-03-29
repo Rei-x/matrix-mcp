@@ -63,7 +63,7 @@ const mcpRequestRaw = async (body: Record<string, unknown>) => {
     env
   );
   expect(response.status).toBe(200);
-  return (await response.json());
+  return response.json();
 };
 
 const callTool = async (name: string, args: Record<string, unknown> = {}) => {
@@ -149,6 +149,7 @@ describe("mcp server", () => {
       expect(toolNames).toContain("whoami");
       expect(toolNames).toContain("search_users");
       expect(toolNames).toContain("get_user_profile");
+      expect(toolNames).toContain("list_recent_rooms");
     });
 
     it("should have descriptions for all tools", async () => {
@@ -504,6 +505,29 @@ describe("mcp server", () => {
     });
   });
 
+  describe("list_recent_rooms", () => {
+    it("should return rooms sorted by recent activity", async () => {
+      const result = await callTool("list_recent_rooms", { limit: 5 });
+      expect(result.total).toBeGreaterThan(0);
+      const rooms = result.rooms as {
+        last_activity: string | null;
+        name: string | null;
+        room_id: string;
+        topic: string | null;
+      }[];
+      expect(rooms.length).toBeLessThanOrEqual(5);
+      expect(rooms[0]!.room_id).toMatch(/^!/);
+      // First room should have activity (we sent messages in earlier tests)
+      expect(rooms[0]!.last_activity).toBeTruthy();
+    });
+
+    it("should use default limit of 10", async () => {
+      const result = await callTool("list_recent_rooms", {});
+      const rooms = result.rooms as { room_id: string }[];
+      expect(rooms.length).toBeLessThanOrEqual(10);
+    });
+  });
+
   describe("create_room and leave_room", () => {
     it("should have created the shared test room successfully", () => {
       // Room creation is tested via the beforeAll hook
@@ -573,8 +597,121 @@ describe("mcp server", () => {
         env
       );
       expect(response.status).toBe(200);
-      const json = (await response.json());
+      const json = await response.json();
       expect(json.jsonrpc).toBe("2.0");
+    });
+  });
+
+  describe("oauth authorization", () => {
+    const authEnv = { ...env, MCP_AUTH_TOKEN: "test-secret-token" };
+
+    it("should serve protected resource metadata (RFC 9728)", async () => {
+      const response = await app.request(
+        "/.well-known/oauth-protected-resource/mcp",
+        { method: "GET" },
+        authEnv
+      );
+      expect(response.status).toBe(200);
+      const metadata = await response.json();
+      expect(metadata.resource).toBeDefined();
+      expect(metadata.authorization_servers).toBeDefined();
+      expect(
+        (metadata.authorization_servers as string[]).length
+      ).toBeGreaterThan(0);
+      expect(metadata.resource_name).toBe("Matrix MCP Server");
+    });
+
+    it("should return 401 with WWW-Authenticate header when no token", async () => {
+      const response = await app.request(
+        "/mcp",
+        {
+          body: JSON.stringify({
+            id: 1,
+            jsonrpc: "2.0",
+            method: "tools/list",
+            params: {},
+          }),
+          headers: {
+            Accept: "application/json, text/event-stream",
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        },
+        authEnv
+      );
+      expect(response.status).toBe(401);
+      const wwwAuth = response.headers.get("WWW-Authenticate");
+      expect(wwwAuth).toBeTruthy();
+      expect(wwwAuth).toContain("Bearer");
+      expect(wwwAuth).toContain("resource_metadata");
+    });
+
+    it("should reject invalid bearer token", async () => {
+      const response = await app.request(
+        "/mcp",
+        {
+          body: JSON.stringify({
+            id: 1,
+            jsonrpc: "2.0",
+            method: "tools/list",
+            params: {},
+          }),
+          headers: {
+            Accept: "application/json, text/event-stream",
+            Authorization: "Bearer wrong-token",
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        },
+        authEnv
+      );
+      expect(response.status).toBe(401);
+    });
+
+    it("should accept valid bearer token", async () => {
+      const response = await app.request(
+        "/mcp",
+        {
+          body: JSON.stringify({
+            id: 1,
+            jsonrpc: "2.0",
+            method: "tools/list",
+            params: {},
+          }),
+          headers: {
+            Accept: "application/json, text/event-stream",
+            Authorization: "Bearer test-secret-token",
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        },
+        authEnv
+      );
+      expect(response.status).toBe(200);
+      const json = await response.json();
+      expect(json.jsonrpc).toBe("2.0");
+    });
+
+    it("should skip auth when MCP_AUTH_TOKEN is not set", async () => {
+      const noAuthEnv = { ...env, MCP_AUTH_TOKEN: "" };
+      const response = await app.request(
+        "/mcp",
+        {
+          body: JSON.stringify({
+            id: 1,
+            jsonrpc: "2.0",
+            method: "tools/list",
+            params: {},
+          }),
+          headers: {
+            Accept: "application/json, text/event-stream",
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        },
+        noAuthEnv
+      );
+      expect(response.status).toBe(200);
     });
   });
 });

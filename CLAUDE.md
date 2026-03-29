@@ -2,25 +2,40 @@ Use bun as package manager.
 
 ## Project Structure
 
-This is a Matrix MCP server built with `@modelcontextprotocol/sdk`, Hono, and Cloudflare Workers.
+This is a Matrix MCP server built with Mastra (`@mastra/mcp`, `@mastra/core/tools`), Hono, and Cloudflare Workers.
+
+Tools are defined using Mastra's `createTool()` and passed directly to Mastra's `MCPServer`. For CF Workers transport, `MCPServer.getServer()` provides the underlying MCP SDK `Server` which connects to `WebStandardStreamableHTTPServerTransport`. OAuth 2.1 authorization is implemented in `src/auth/`.
 
 ```
 src/
-  app.ts                       - Hono app + MCP server setup (shared)
+  app.ts                       - Hono app + Mastra MCPServer setup
   worker.ts                    - Cloudflare Workers entry point
   server.ts                    - Node.js entry point (via @hono/node-server)
   env.ts                       - Environment type definitions
+  auth/
+    oauth.ts                   - OAuth 2.1 authorization server (RFC 8414, 7591, 9728)
+    tokens.ts                  - Stateless HMAC-SHA256 signed tokens
   matrix/
-    client.ts                  - Matrix Client-Server API wrapper
+    client.ts                  - Matrix Client-Server API wrapper (typed HTTP client)
+  stubs/
+    cross-spawn.ts             - Stub for CF Workers (see note below)
   tools/
-    index.ts                   - Tool registration (registerAllTools)
-    rooms.ts                   - Room management tools (list, info, join, leave, create, search, invite, topic)
-    messages.ts                - Message tools (read, send, reply, react, redact, read receipts)
-    users.ts                   - User tools (whoami, search, profile)
+    index.ts                   - Tool aggregation (createAllTools)
+    rooms.ts                   - Room management tools (Mastra createTool)
+    messages.ts                - Message tools (Mastra createTool)
+    users.ts                   - User tools (Mastra createTool)
   test/
     env.d.ts                   - Cloudflare test environment types
     server.test.ts             - Integration tests via Workers pool
 ```
+
+### CF Workers + @mastra/mcp
+
+`@mastra/mcp` bundles both MCPClient and MCPServer in a single entry point. MCPClient imports `cross-spawn` → `node:child_process` which is unavailable in CF Workers. The workaround:
+
+- `vitest.config.ts` aliases `cross-spawn` to `src/stubs/cross-spawn.ts`
+- `ssr.noExternal` forces Vite to bundle `@mastra/mcp` so the alias applies
+- `MCPServer.getServer()` returns the underlying SDK Server, which connects to `WebStandardStreamableHTTPServerTransport` (native web standard, no Node.js req/res needed)
 
 ## Commands
 
@@ -37,6 +52,7 @@ src/
 
 - `MATRIX_BASE_URL` - Matrix homeserver URL (e.g., https://matrix.example.com)
 - `MATRIX_ACCESS_TOKEN` - Matrix access token for authentication
+- `MCP_AUTH_TOKEN` - (optional) Signing key for OAuth tokens and login password
 
 ## MCP Tools
 
@@ -66,12 +82,24 @@ src/
 - `search_users` - Search user directory
 - `get_user_profile` - Get user display name
 
+## OAuth Endpoints
+
+- `GET /.well-known/oauth-authorization-server` - Authorization server metadata (RFC 8414)
+- `GET /.well-known/oauth-protected-resource/:path` - Protected resource metadata (RFC 9728)
+- `POST /register` - Dynamic client registration (RFC 7591)
+- `GET /authorize` - Authorization (login form)
+- `POST /authorize` - Authorization (form submit)
+- `POST /token` - Token exchange (authorization_code, refresh_token)
+
 ## Conventions
 
-- Use Zod schemas for tool input validation
-- Tool handler receives parsed args directly
+- Tools are defined using Mastra `createTool()` from `@mastra/core/tools`
+- Tools have `inputSchema` and `outputSchema` (Zod) for type safety
+- Tool factories take `MatrixClient` and return tool objects
+- Tools are passed directly to Mastra `MCPServer` (no adapter needed)
 - MCP endpoint: `/mcp` (or `/`)
-- All Matrix API calls go through `MatrixClient` class
+- All Matrix API calls go through custom `MatrixClient` class (typed HTTP wrapper)
+- MatrixClient methods use typed generics (`request<T>`) for all API responses
 - Integration tests run against real Matrix server (no mocking)
 - MatrixClient auto-retries on 429 rate limits (up to 3 retries, max 10s wait)
 - Object keys should be alphabetically sorted

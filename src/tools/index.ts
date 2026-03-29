@@ -1,13 +1,11 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-
 import type { MatrixClient } from "@/matrix/client";
 
-import { registerMessageTools } from "./messages";
-import { registerRoomTools } from "./rooms";
-import { registerUserTools } from "./users";
+import { createMessageTools } from "./messages";
+import { createRoomTools } from "./rooms";
+import { createUserTools } from "./users";
 
-export const registerAllTools = (server: McpServer, client: MatrixClient) => {
-  registerRoomTools(server, client);
-  registerMessageTools(server, client);
-  registerUserTools(server, client);
-};
+export const createAllTools = (client: MatrixClient) => ({
+  ...createRoomTools(client),
+  ...createMessageTools(client),
+  ...createUserTools(client),
+});
