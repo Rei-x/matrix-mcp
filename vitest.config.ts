@@ -13,10 +13,12 @@ export default defineWorkersConfig({
   },
   test: {
     globals: true,
+    hookTimeout: 60_000,
     poolOptions: {
       workers: {
         wrangler: { configPath: "./wrangler.toml" },
       },
     },
+    testTimeout: 30_000,
   },
 });

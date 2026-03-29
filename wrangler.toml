@@ -1,7 +1,11 @@
-name = "mcp-server-template"
+name = "mcp-server-matrix"
 main = "src/worker.ts"
 compatibility_date = "2026-02-24"
 compatibility_flags = ["nodejs_compat"]
+
+[vars]
+MATRIX_BASE_URL = "https://matrix.suzuya.dev"
+# MATRIX_ACCESS_TOKEN and MCP_AUTH_TOKEN are stored as secrets via `wrangler secret put`
 
 [observability]
 enabled = false

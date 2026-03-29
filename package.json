@@ -1,5 +1,5 @@
 {
-  "name": "mcp-server-template",
+  "name": "mcp-server-matrix",
   "private": true,
   "type": "module",
   "module": "src/worker.ts",

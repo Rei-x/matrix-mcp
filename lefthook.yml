@@ -2,7 +2,7 @@ pre-commit:
   parallel: true
   jobs:
     - name: check
-      run: bun run check
+      run: npm run check
 
     - name: test
-      run: bun run test
+      run: npm run test
