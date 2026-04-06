@@ -5,7 +5,7 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 MATRIX_BASE_URL = "https://matrix.suzuya.dev"
-# MATRIX_ACCESS_TOKEN and MCP_AUTH_TOKEN are stored as secrets via `wrangler secret put`
+# MATRIX_ACCESS_TOKEN and MCP_AUTH_TOKEN (URL path secret → `https://host/<token>/mcp`) via `wrangler secret put`
 
 [observability]
 enabled = false

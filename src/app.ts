@@ -1,9 +1,4 @@
-import {
-  MCPServer,
-  extractBearerToken,
-  generateProtectedResourceMetadata,
-  generateWWWAuthenticateHeader,
-} from "@mastra/mcp";
+import { MCPServer } from "@mastra/mcp";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -12,6 +7,25 @@ import { cors } from "hono/cors";
 import type { AppEnv } from "@/env";
 import { MatrixClient } from "@/matrix/client";
 import { createAllTools } from "@/tools";
+
+/** Constant-time comparison for path tokens (mitigates timing leaks). */
+const timingSafeEqualString = async (
+  a: string,
+  b: string
+): Promise<boolean> => {
+  const enc = new TextEncoder();
+  const ba = enc.encode(a);
+  const bb = enc.encode(b);
+  if (ba.length !== bb.length) {
+    return false;
+  }
+  return crypto.subtle.timingSafeEqual(ba, bb);
+};
+
+const mcpAuthSecretConfigured = (c: Context<AppEnv>): boolean => {
+  const t = c.env.MCP_AUTH_TOKEN;
+  return t !== undefined && t !== "";
+};
 
 export const createMCPServer = (env: AppEnv["Bindings"]) => {
   const client = new MatrixClient(env.MATRIX_BASE_URL, env.MATRIX_ACCESS_TOKEN);
@@ -43,50 +57,6 @@ export const createApp = () => {
     })
   );
 
-  // --- OAuth Protected Resource Metadata (RFC 9728) ---
-  // Uses Mastra's generateProtectedResourceMetadata to serve discovery metadata.
-  app.get("/.well-known/oauth-protected-resource/:path{.*}?", (c) => {
-    const authToken = c.env.MCP_AUTH_TOKEN;
-    if (authToken === undefined || authToken === "") {
-      return c.json({ error: "OAuth not configured" }, 404);
-    }
-
-    const issuer = `${new URL(c.req.url).origin}`;
-    const metadata = generateProtectedResourceMetadata({
-      authorizationServers: [issuer],
-      resource: issuer,
-      resourceName: "Matrix MCP Server",
-      scopesSupported: ["mcp:read", "mcp:write"],
-    });
-    return c.json(metadata);
-  });
-
-  // --- OAuth Token Validation Middleware ---
-  // Uses Mastra's extractBearerToken and generateWWWAuthenticateHeader.
-  const authMiddleware = async (
-    c: Context<AppEnv>,
-    next: () => Promise<void>
-  ) => {
-    const authToken = c.env.MCP_AUTH_TOKEN;
-    if (authToken === undefined || authToken === "") {
-      await next();
-      return;
-    }
-
-    const token = extractBearerToken(c.req.header("Authorization") ?? null);
-    if (token === authToken) {
-      await next();
-      return;
-    }
-
-    const { origin } = new URL(c.req.url);
-    return c.json({ error: "Unauthorized" }, 401, {
-      "WWW-Authenticate": generateWWWAuthenticateHeader({
-        resourceMetadataUrl: `${origin}/.well-known/oauth-protected-resource`,
-      }),
-    });
-  };
-
   const mcpHandler = async (c: Context<AppEnv>) => {
     const mcpServer = createMCPServer(c.env);
     const sdkServer = mcpServer.getServer();
@@ -97,8 +67,35 @@ export const createApp = () => {
     return transport.handleRequest(c.req.raw);
   };
 
-  app.all("/mcp", authMiddleware, mcpHandler);
-  app.all("/", authMiddleware, mcpHandler);
+  // With MCP_AUTH_TOKEN set: MCP only at `/:token/mcp` (token must match the secret).
+  // Without it: `/mcp` and `/` for local dev.
+  app.all("/:token/mcp", async (c) => {
+    if (!mcpAuthSecretConfigured(c)) {
+      return c.notFound();
+    }
+    const expected = c.env.MCP_AUTH_TOKEN;
+    if (expected === undefined || expected === "") {
+      return c.notFound();
+    }
+    if (!(await timingSafeEqualString(c.req.param("token"), expected))) {
+      return c.notFound();
+    }
+    return mcpHandler(c);
+  });
+
+  app.all("/mcp", (c) => {
+    if (mcpAuthSecretConfigured(c)) {
+      return c.notFound();
+    }
+    return mcpHandler(c);
+  });
+
+  app.all("/", (c) => {
+    if (mcpAuthSecretConfigured(c)) {
+      return c.notFound();
+    }
+    return mcpHandler(c);
+  });
 
   return app;
 };

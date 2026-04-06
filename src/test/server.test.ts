@@ -602,26 +602,10 @@ describe("mcp server", () => {
     });
   });
 
-  describe("oauth authorization", () => {
+  describe("path token authorization", () => {
     const authEnv = { ...env, MCP_AUTH_TOKEN: "test-secret-token" };
 
-    it("should serve protected resource metadata (RFC 9728)", async () => {
-      const response = await app.request(
-        "/.well-known/oauth-protected-resource/mcp",
-        { method: "GET" },
-        authEnv
-      );
-      expect(response.status).toBe(200);
-      const metadata = await response.json();
-      expect(metadata.resource).toBeDefined();
-      expect(metadata.authorization_servers).toBeDefined();
-      expect(
-        (metadata.authorization_servers as string[]).length
-      ).toBeGreaterThan(0);
-      expect(metadata.resource_name).toBe("Matrix MCP Server");
-    });
-
-    it("should return 401 with WWW-Authenticate header when no token", async () => {
+    it("should 404 on /mcp when MCP_AUTH_TOKEN is set", async () => {
       const response = await app.request(
         "/mcp",
         {
@@ -639,16 +623,12 @@ describe("mcp server", () => {
         },
         authEnv
       );
-      expect(response.status).toBe(401);
-      const wwwAuth = response.headers.get("WWW-Authenticate");
-      expect(wwwAuth).toBeTruthy();
-      expect(wwwAuth).toContain("Bearer");
-      expect(wwwAuth).toContain("resource_metadata");
+      expect(response.status).toBe(404);
     });
 
-    it("should reject invalid bearer token", async () => {
+    it("should 404 for wrong path token", async () => {
       const response = await app.request(
-        "/mcp",
+        "/wrong-token/mcp",
         {
           body: JSON.stringify({
             id: 1,
@@ -658,19 +638,18 @@ describe("mcp server", () => {
           }),
           headers: {
             Accept: "application/json, text/event-stream",
-            Authorization: "Bearer wrong-token",
             "Content-Type": "application/json",
           },
           method: "POST",
         },
         authEnv
       );
-      expect(response.status).toBe(401);
+      expect(response.status).toBe(404);
     });
 
-    it("should accept valid bearer token", async () => {
+    it("should accept MCP at /:token/mcp when token matches", async () => {
       const response = await app.request(
-        "/mcp",
+        "/test-secret-token/mcp",
         {
           body: JSON.stringify({
             id: 1,
@@ -680,7 +659,6 @@ describe("mcp server", () => {
           }),
           headers: {
             Accept: "application/json, text/event-stream",
-            Authorization: "Bearer test-secret-token",
             "Content-Type": "application/json",
           },
           method: "POST",

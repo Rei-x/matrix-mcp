@@ -4,7 +4,7 @@ Use bun as package manager.
 
 This is a Matrix MCP server built with Mastra (`@mastra/mcp`, `@mastra/core/tools`), Hono, and Cloudflare Workers.
 
-Tools are defined using Mastra's `createTool()` and passed directly to Mastra's `MCPServer`. For CF Workers transport, `MCPServer.getServer()` provides the underlying MCP SDK `Server` which connects to `WebStandardStreamableHTTPServerTransport`. OAuth 2.1 authorization is implemented in `src/auth/`.
+Tools are defined using Mastra's `createTool()` and passed directly to Mastra's `MCPServer`. For CF Workers transport, `MCPServer.getServer()` provides the underlying MCP SDK `Server` which connects to `WebStandardStreamableHTTPServerTransport`. Optional path-based access control uses `MCP_AUTH_TOKEN` (see Environment Variables).
 
 ```
 src/
@@ -12,9 +12,6 @@ src/
   worker.ts                    - Cloudflare Workers entry point
   server.ts                    - Node.js entry point (via @hono/node-server)
   env.ts                       - Environment type definitions
-  auth/
-    oauth.ts                   - OAuth 2.1 authorization server (RFC 8414, 7591, 9728)
-    tokens.ts                  - Stateless HMAC-SHA256 signed tokens
   matrix/
     client.ts                  - Matrix Client-Server API wrapper (typed HTTP client)
   stubs/
@@ -52,7 +49,7 @@ src/
 
 - `MATRIX_BASE_URL` - Matrix homeserver URL (e.g., https://matrix.example.com)
 - `MATRIX_ACCESS_TOKEN` - Matrix access token for authentication
-- `MCP_AUTH_TOKEN` - (optional) Signing key for OAuth tokens and login password
+- `MCP_AUTH_TOKEN` - (optional) Secret path segment; when set, MCP is only at `https://host/<token>/mcp` (plain `/mcp` and `/` return 404)
 
 ## MCP Tools
 
@@ -82,22 +79,13 @@ src/
 - `search_users` - Search user directory
 - `get_user_profile` - Get user display name
 
-## OAuth Endpoints
-
-- `GET /.well-known/oauth-authorization-server` - Authorization server metadata (RFC 8414)
-- `GET /.well-known/oauth-protected-resource/:path` - Protected resource metadata (RFC 9728)
-- `POST /register` - Dynamic client registration (RFC 7591)
-- `GET /authorize` - Authorization (login form)
-- `POST /authorize` - Authorization (form submit)
-- `POST /token` - Token exchange (authorization_code, refresh_token)
-
 ## Conventions
 
 - Tools are defined using Mastra `createTool()` from `@mastra/core/tools`
 - Tools have `inputSchema` and `outputSchema` (Zod) for type safety
 - Tool factories take `MatrixClient` and return tool objects
 - Tools are passed directly to Mastra `MCPServer` (no adapter needed)
-- MCP endpoint: `/mcp` (or `/`)
+- MCP endpoint: `/mcp` and `/` when `MCP_AUTH_TOKEN` is unset; `/<MCP_AUTH_TOKEN>/mcp` when it is set
 - All Matrix API calls go through custom `MatrixClient` class (typed HTTP wrapper)
 - MatrixClient methods use typed generics (`request<T>`) for all API responses
 - Integration tests run against real Matrix server (no mocking)
