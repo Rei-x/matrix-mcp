@@ -1,11 +1,9 @@
 import type { MatrixClient } from "@/matrix/client";
 
-import { createMessageTools } from "./messages";
-import { createRoomTools } from "./rooms";
+import { createConversationTools } from "./conversations";
 import { createUserTools } from "./users";
 
 export const createAllTools = (client: MatrixClient) => ({
-  ...createRoomTools(client),
-  ...createMessageTools(client),
+  ...createConversationTools(client),
   ...createUserTools(client),
 });

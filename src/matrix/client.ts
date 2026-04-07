@@ -88,11 +88,80 @@ export interface ProfileInfoResponse {
 
 // --- Helpers ---
 
-const sleep = async (ms: number): Promise<void> =>
-  // eslint-disable-next-line no-promise-executor-return -- intentional delay
-  new Promise((resolve) => {
+interface MatrixRequestContext {
+  accessToken: string;
+  baseUrl: string;
+}
+
+const buildRequestHeaders = (
+  accessToken: string,
+  body?: Record<string, unknown>
+): Record<string, string> => {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${accessToken}`,
+  };
+  if (body) {
+    headers["Content-Type"] = "application/json";
+  }
+  return headers;
+};
+
+const buildRequestUrl = (
+  baseUrl: string,
+  path: string,
+  query?: Record<string, string>
+): URL => {
+  const url = new URL(`/_matrix/client/v3${path}`, baseUrl);
+  if (query) {
+    for (const [k, v] of Object.entries(query)) {
+      url.searchParams.set(k, v);
+    }
+  }
+  return url;
+};
+
+const parseJsonOrThrow = async <T>(response: Response): Promise<T> => {
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Matrix API error ${response.status}: ${text}`);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Matrix responses are caller-typed per endpoint
+  return (await response.json()) as T;
+};
+
+/* setTimeout-backed delay; Workers have no `timers/promises`. */
+const sleep = async (ms: number): Promise<void> => {
+  // eslint-disable-next-line promise/avoid-new -- only portable sleep on Workers
+  await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
+};
+
+const matrixRequest = async <T>(
+  ctx: MatrixRequestContext,
+  method: string,
+  path: string,
+  body?: Record<string, unknown>,
+  query?: Record<string, string>,
+  retries = 3
+): Promise<T> => {
+  const url = buildRequestUrl(ctx.baseUrl, path, query);
+  const headers = buildRequestHeaders(ctx.accessToken, body);
+  const response = await fetch(url.toString(), {
+    body: body ? JSON.stringify(body) : undefined,
+    headers,
+    method,
+  });
+
+  if (response.status === 429 && retries > 0) {
+    const retryJson: { retry_after_ms?: number } = await response.json();
+    const waitMs = Math.min(retryJson.retry_after_ms ?? 3000, 5000);
+    await sleep(waitMs);
+    return matrixRequest<T>(ctx, method, path, body, query, retries - 1);
+  }
+
+  return parseJsonOrThrow<T>(response);
+};
 
 const roomPath = (roomId: string): string =>
   `/rooms/${encodeURIComponent(roomId)}`;
@@ -115,51 +184,29 @@ export class MatrixClient {
     query?: Record<string, string>,
     retries = 3
   ): Promise<T> {
-    const url = new URL(`/_matrix/client/v3${path}`, this.baseUrl);
-    if (query) {
-      for (const [k, v] of Object.entries(query)) {
-        url.searchParams.set(k, v);
-      }
-    }
-
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.accessToken}`,
-    };
-    if (body) {
-      headers["Content-Type"] = "application/json";
-    }
-
-    const response = await fetch(url.toString(), {
-      body: body ? JSON.stringify(body) : undefined,
-      headers,
+    const out = await matrixRequest<T>(
+      { accessToken: this.accessToken, baseUrl: this.baseUrl },
       method,
-    });
-
-    if (response.status === 429 && retries > 0) {
-      const retryJson: { retry_after_ms?: number } = await response.json();
-      const waitMs = Math.min(retryJson.retry_after_ms ?? 3000, 5000);
-      await sleep(waitMs);
-      return this.request<T>(method, path, body, query, retries - 1);
-    }
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Matrix API error ${response.status}: ${text}`);
-    }
-
-    return (await response.json()) as T;
+      path,
+      body,
+      query,
+      retries
+    );
+    return out;
   }
 
   // --- Identity ---
 
   async whoAmI(): Promise<WhoAmIResponse> {
-    return this.request<WhoAmIResponse>("GET", "/account/whoami");
+    const out = await this.request<WhoAmIResponse>("GET", "/account/whoami");
+    return out;
   }
 
   // --- Room state ---
 
   async getJoinedRooms(): Promise<JoinedRoomsResponse> {
-    return this.request<JoinedRoomsResponse>("GET", "/joined_rooms");
+    const out = await this.request<JoinedRoomsResponse>("GET", "/joined_rooms");
+    return out;
   }
 
   async getRoomName(roomId: string): Promise<string | null> {
@@ -194,12 +241,13 @@ export class MatrixClient {
     if (membership !== undefined && membership !== "") {
       query.membership = membership;
     }
-    return this.request<RoomMembersResponse>(
+    const out = await this.request<RoomMembersResponse>(
       "GET",
       `${roomPath(roomId)}/members`,
       undefined,
       query
     );
+    return out;
   }
 
   async setRoomTopic(roomId: string, topic: string): Promise<void> {
@@ -231,18 +279,19 @@ export class MatrixClient {
     if (options.filter !== undefined && options.filter !== "") {
       query.filter = options.filter;
     }
-    return this.request<RoomMessagesResponse>(
+    const out = await this.request<RoomMessagesResponse>(
       "GET",
       `${roomPath(roomId)}/messages`,
       undefined,
       query
     );
+    return out;
   }
 
   async getLastMessageTimestamp(roomId: string): Promise<number | null> {
     try {
       const result = await this.getRoomMessages(roomId, { limit: 1 });
-      const firstEvent = result.chunk[0];
+      const [firstEvent] = result.chunk;
       if (firstEvent !== undefined) {
         return firstEvent.origin_server_ts;
       }
@@ -258,11 +307,12 @@ export class MatrixClient {
     msgtype = "m.text"
   ): Promise<SendEventResponse> {
     const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    return this.request<SendEventResponse>(
+    const out = await this.request<SendEventResponse>(
       "PUT",
       `${roomPath(roomId)}/send/m.room.message/${txnId}`,
       { body, msgtype }
     );
+    return out;
   }
 
   async sendReaction(
@@ -271,7 +321,7 @@ export class MatrixClient {
     reaction: string
   ): Promise<SendEventResponse> {
     const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    return this.request<SendEventResponse>(
+    const out = await this.request<SendEventResponse>(
       "PUT",
       `${roomPath(roomId)}/send/m.reaction/${txnId}`,
       {
@@ -282,6 +332,7 @@ export class MatrixClient {
         },
       }
     );
+    return out;
   }
 
   async replyToMessage(
@@ -290,7 +341,7 @@ export class MatrixClient {
     body: string
   ): Promise<SendEventResponse> {
     const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    return this.request<SendEventResponse>(
+    const out = await this.request<SendEventResponse>(
       "PUT",
       `${roomPath(roomId)}/send/m.room.message/${txnId}`,
       {
@@ -303,6 +354,7 @@ export class MatrixClient {
         msgtype: "m.text",
       }
     );
+    return out;
   }
 
   async redactEvent(
@@ -312,11 +364,12 @@ export class MatrixClient {
   ): Promise<SendEventResponse> {
     const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const body = reason !== undefined && reason !== "" ? { reason } : {};
-    return this.request<SendEventResponse>(
+    const out = await this.request<SendEventResponse>(
       "PUT",
       `${roomPath(roomId)}/redact/${encodeURIComponent(eventId)}/${txnId}`,
       body
     );
+    return out;
   }
 
   async sendReadReceipt(roomId: string, eventId: string): Promise<void> {
@@ -336,15 +389,21 @@ export class MatrixClient {
     preset?: "private_chat" | "public_chat" | "trusted_private_chat";
     topic?: string;
   }): Promise<CreateRoomResponse> {
-    return this.request<CreateRoomResponse>("POST", "/createRoom", options);
+    const out = await this.request<CreateRoomResponse>(
+      "POST",
+      "/createRoom",
+      options
+    );
+    return out;
   }
 
   async joinRoom(roomIdOrAlias: string): Promise<{ room_id: string }> {
-    return this.request<{ room_id: string }>(
+    const out = await this.request<{ room_id: string }>(
       "POST",
       `/join/${encodeURIComponent(roomIdOrAlias)}`,
       {}
     );
+    return out;
   }
 
   async leaveRoom(roomId: string): Promise<void> {
@@ -381,11 +440,15 @@ export class MatrixClient {
     searchTerm: string,
     limit = 10
   ): Promise<UserDirectoryResponse> {
-    return this.request<UserDirectoryResponse>(
+    const out = await this.request<UserDirectoryResponse>(
       "POST",
       "/user_directory/search",
-      { limit, search_term: searchTerm }
+      {
+        limit,
+        search_term: searchTerm,
+      }
     );
+    return out;
   }
 
   // --- Public rooms ---
@@ -398,11 +461,16 @@ export class MatrixClient {
     } = {}
   ): Promise<PublicRoomsResponse> {
     if (options.searchTerm !== undefined && options.searchTerm !== "") {
-      return this.request<PublicRoomsResponse>("POST", "/publicRooms", {
-        filter: { generic_search_term: options.searchTerm },
-        limit: options.limit ?? 20,
-        since: options.since,
-      });
+      const postOut = await this.request<PublicRoomsResponse>(
+        "POST",
+        "/publicRooms",
+        {
+          filter: { generic_search_term: options.searchTerm },
+          limit: options.limit ?? 20,
+          since: options.since,
+        }
+      );
+      return postOut;
     }
     const query: Record<string, string> = {
       limit: String(options.limit ?? 20),
@@ -410,11 +478,12 @@ export class MatrixClient {
     if (options.since !== undefined && options.since !== "") {
       query.since = options.since;
     }
-    return this.request<PublicRoomsResponse>(
+    const getOut = await this.request<PublicRoomsResponse>(
       "GET",
       "/publicRooms",
       undefined,
       query
     );
+    return getOut;
   }
 }
