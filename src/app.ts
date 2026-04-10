@@ -39,6 +39,25 @@ export const createMCPServer = (env: AppEnv["Bindings"]) => {
 
 export const createApp = () => {
   const app = new Hono<AppEnv>();
+  app.get("/health", async (c): Promise<Response> => {
+    const { MATRIX_ACCESS_TOKEN, MATRIX_BASE_URL } = c.env;
+    if (
+      MATRIX_BASE_URL === "" ||
+      MATRIX_ACCESS_TOKEN === "" ||
+      MATRIX_BASE_URL === undefined ||
+      MATRIX_ACCESS_TOKEN === undefined
+    ) {
+      return c.text("matrix not configured", 503);
+    }
+    try {
+      const client = new MatrixClient(MATRIX_BASE_URL, MATRIX_ACCESS_TOKEN);
+      await client.whoAmI();
+      return c.text("ok", 200);
+    } catch {
+      return c.text("matrix unavailable", 503);
+    }
+  });
+
   app.use(
     "/*",
     cors({
