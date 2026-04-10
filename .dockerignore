@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+node_modules
+dist
+coverage
+*.log
+.DS_Store
+.cursor
+.claude
+.agents
+**/*.test.ts
+vitest.config.ts

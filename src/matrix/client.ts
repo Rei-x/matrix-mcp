@@ -1,3 +1,5 @@
+import { setTimeout as sleepTimer } from "node:timers/promises";
+
 // --- Response types ---
 
 export interface WhoAmIResponse {
@@ -129,12 +131,16 @@ const parseJsonOrThrow = async <T>(response: Response): Promise<T> => {
   return (await response.json()) as T;
 };
 
-/* setTimeout-backed delay; Workers have no `timers/promises`. */
 const sleep = async (ms: number): Promise<void> => {
-  // eslint-disable-next-line promise/avoid-new -- only portable sleep on Workers
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
+  await sleepTimer(ms);
+};
+
+const retryAfterMsFrom429Body = (raw: unknown): number | undefined => {
+  if (typeof raw !== "object" || raw === null || !("retry_after_ms" in raw)) {
+    return undefined;
+  }
+  const ms = Reflect.get(raw, "retry_after_ms");
+  return typeof ms === "number" ? ms : undefined;
 };
 
 const matrixRequest = async <T>(
@@ -154,8 +160,10 @@ const matrixRequest = async <T>(
   });
 
   if (response.status === 429 && retries > 0) {
-    const retryJson: { retry_after_ms?: number } = await response.json();
-    const waitMs = Math.min(retryJson.retry_after_ms ?? 3000, 5000);
+    const waitMs = Math.min(
+      retryAfterMsFrom429Body(await response.json()) ?? 3000,
+      5000
+    );
     await sleep(waitMs);
     return matrixRequest<T>(ctx, method, path, body, query, retries - 1);
   }
@@ -410,6 +418,14 @@ export class MatrixClient {
     await this.request<Record<string, never>>(
       "POST",
       `${roomPath(roomId)}/leave`,
+      {}
+    );
+  }
+
+  async forgetRoom(roomId: string): Promise<void> {
+    await this.request<Record<string, never>>(
+      "POST",
+      `${roomPath(roomId)}/forget`,
       {}
     );
   }

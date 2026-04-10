@@ -1,6 +1,9 @@
-// Stub for cross-spawn in Cloudflare Workers.
-// @mastra/mcp bundles MCPClient which imports cross-spawn for stdio transport.
-// MCPServer (which we use) never calls this code path.
-export default function spawn(): never {
-  throw new Error("cross-spawn is not available in Cloudflare Workers");
-}
+// Stub for `cross-spawn` when Vitest bundles `@mastra/mcp` (MCPClient stdio path; MCPServer does not use it).
+
+const unavailable = (): never => {
+  throw new Error(
+    "cross-spawn is stubbed; MCP stdio transport is not supported in this project"
+  );
+};
+
+export default unavailable;

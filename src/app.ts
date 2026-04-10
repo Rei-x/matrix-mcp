@@ -1,3 +1,5 @@
+import { timingSafeEqual } from "node:crypto";
+
 import { MCPServer } from "@mastra/mcp";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
@@ -10,13 +12,12 @@ import { createAllTools } from "@/tools";
 
 /** Constant-time comparison for path tokens (mitigates timing leaks). */
 const timingSafeEqualString = (a: string, b: string): boolean => {
-  const enc = new TextEncoder();
-  const ba = enc.encode(a);
-  const bb = enc.encode(b);
+  const ba = Buffer.from(a, "utf-8");
+  const bb = Buffer.from(b, "utf-8");
   if (ba.length !== bb.length) {
     return false;
   }
-  return crypto.subtle.timingSafeEqual(ba, bb);
+  return timingSafeEqual(ba, bb);
 };
 
 const mcpAuthSecretConfigured = (c: Context<AppEnv>): boolean => {

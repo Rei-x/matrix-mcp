@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { createApp } from "@/app";
 import type { AppEnv } from "@/env";
+import { MatrixClient } from "@/matrix/client";
 
 export const assertPresent = <T>(value: T | undefined, message: string): T => {
   if (value === undefined) {
@@ -21,7 +22,7 @@ export const toolListResultSchema = z.object({
   tools: z.array(
     z.object({
       description: z.string().optional(),
-      inputSchema: z.record(z.unknown()),
+      inputSchema: z.record(z.string(), z.unknown()),
       name: z.string(),
     })
   ),
@@ -51,7 +52,7 @@ const parseToolPayload = (envelope: z.infer<typeof toolCallResultSchema>) => {
     throw new Error("unreachable: MCP tool content had min(1) but no element");
   }
   const firstBlock = z.object({ text: z.string() }).parse(rawFirst);
-  return z.record(z.unknown()).parse(JSON.parse(firstBlock.text));
+  return z.record(z.string(), z.unknown()).parse(JSON.parse(firstBlock.text));
 };
 
 export const REQUIRED_TOOL_NAMES = [
@@ -81,12 +82,12 @@ const rpcInnerResultIsToolError = (res: unknown): boolean => {
   if (res === null || typeof res !== "object") {
     return false;
   }
-  const inner = z.record(z.unknown()).safeParse(res);
+  const inner = z.record(z.string(), z.unknown()).safeParse(res);
   return inner.success && inner.data.isError === true;
 };
 
 export const rpcIndicatesToolFailure = (data: unknown): boolean => {
-  const r = z.record(z.unknown()).safeParse(data);
+  const r = z.record(z.string(), z.unknown()).safeParse(data);
   if (!r.success) {
     return false;
   }
@@ -95,9 +96,6 @@ export const rpcIndicatesToolFailure = (data: unknown): boolean => {
   }
   return rpcInnerResultIsToolError(r.data.result);
 };
-
-/** Vitest workers inject `ProvidedEnv`; production uses full `Bindings`. */
-export type CloudflareTestEnv = AppEnv["Bindings"] | Record<string, string>;
 
 export interface SharedRoom {
   id: string;
@@ -113,34 +111,41 @@ export interface McpSuite {
     name: string,
     args?: Record<string, unknown>
   ) => Promise<z.infer<typeof toolCallResultSchema>>;
+  cleanupSharedRoom: () => Promise<void>;
   ensureSharedRoom: () => Promise<void>;
   mcpRequest: (
     body: Record<string, unknown>
   ) => Promise<z.infer<typeof jsonrpcResponseSchema>>;
   mcpRequestRaw: (body: Record<string, unknown>) => Promise<unknown>;
   room: SharedRoom;
-  testEnv: CloudflareTestEnv;
+  testEnv: AppEnv["Bindings"];
 }
 
-const assignSharedRoomFromFirstConversation = async (
-  invoke: McpSuite["callTool"],
+const createDedicatedTestRoom = async (
+  bindings: AppEnv["Bindings"],
   room: SharedRoom
 ): Promise<void> => {
-  const list = z
-    .object({
-      conversations: z.array(z.object({ conversation_id: z.string() })).min(1),
-    })
-    .parse(await invoke("list_conversations", { limit: 1 }));
-  const [first] = list.conversations;
-  if (first === undefined) {
-    throw new Error(
-      "unreachable: list_conversations min(1) had no first conversation"
-    );
-  }
-  room.id = first.conversation_id;
+  const client = new MatrixClient(
+    bindings.MATRIX_BASE_URL,
+    bindings.MATRIX_ACCESS_TOKEN
+  );
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  const { room_id } = await client.createRoom({
+    is_direct: false,
+    name: `matrix-mcp test ${suffix}`,
+    preset: "private_chat",
+    topic:
+      "matrix-mcp integration tests (automated; not a DM — safe to delete).",
+  });
+  await client.sendMessage(
+    room_id,
+    "matrix-mcp integration test room (seed message)",
+    "m.text"
+  );
+  room.id = room_id;
 };
 
-export const createMcpSuite = (testEnv: CloudflareTestEnv): McpSuite => {
+export const createMcpSuite = (testEnv: AppEnv["Bindings"]): McpSuite => {
   const app = createApp();
   const room: SharedRoom = { id: "" };
   const mcpRequest = async (body: Record<string, unknown>) => {
@@ -205,16 +210,53 @@ export const createMcpSuite = (testEnv: CloudflareTestEnv): McpSuite => {
     if (room.id !== "") {
       return;
     }
-    await assignSharedRoomFromFirstConversation(invokeTool, room);
+    await createDedicatedTestRoom(testEnv, room);
+  };
+  const cleanupSharedRoom = async (): Promise<void> => {
+    const { id } = room;
+    if (id === "") {
+      return;
+    }
+    const client = new MatrixClient(
+      testEnv.MATRIX_BASE_URL,
+      testEnv.MATRIX_ACCESS_TOKEN
+    );
+    try {
+      await client.leaveRoom(id);
+    } catch {
+      /* room may already be left */
+    }
+    try {
+      await client.forgetRoom(id);
+    } catch {
+      /* forget can fail if not left or server policy */
+    }
+    room.id = "";
   };
   return {
     app,
     callTool: invokeTool,
     callToolRaw: invokeToolRaw,
+    cleanupSharedRoom,
     ensureSharedRoom,
     mcpRequest,
     mcpRequestRaw,
     room,
     testEnv,
+  };
+};
+
+export const testBindingsFromEnv = (): AppEnv["Bindings"] => {
+  const {
+    MATRIX_ACCESS_TOKEN = "",
+    MATRIX_BASE_URL = "",
+    MCP_AUTH_TOKEN,
+  } = process.env;
+  return {
+    MATRIX_ACCESS_TOKEN,
+    MATRIX_BASE_URL,
+    ...(MCP_AUTH_TOKEN !== undefined && MCP_AUTH_TOKEN !== ""
+      ? { MCP_AUTH_TOKEN }
+      : {}),
   };
 };

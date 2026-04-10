@@ -2,44 +2,38 @@ Use bun as package manager.
 
 ## Project Structure
 
-This is a Matrix MCP server built with Mastra (`@mastra/mcp`, `@mastra/core/tools`), Hono, and Cloudflare Workers.
+This is a Matrix MCP server built with Mastra (`@mastra/mcp`, `@mastra/core/tools`), Hono, and Node.js (`@hono/node-server`).
 
-Tools are defined using Mastra's `createTool()` and passed directly to Mastra's `MCPServer`. For CF Workers transport, `MCPServer.getServer()` provides the underlying MCP SDK `Server` which connects to `WebStandardStreamableHTTPServerTransport`. Optional path-based access control uses `MCP_AUTH_TOKEN` (see Environment Variables).
+Tools are defined using Mastra's `createTool()` and passed directly to Mastra's `MCPServer`. `MCPServer.getServer()` provides the underlying MCP SDK `Server`, which connects to `WebStandardStreamableHTTPServerTransport`. Optional path-based access control uses `MCP_AUTH_TOKEN` (see Environment Variables).
 
 ```
 src/
   app.ts                       - Hono app + Mastra MCPServer setup
-  worker.ts                    - Cloudflare Workers entry point
   server.ts                    - Node.js entry point (via @hono/node-server)
   env.ts                       - Environment type definitions
   matrix/
     client.ts                  - Matrix Client-Server API wrapper (typed HTTP client)
   stubs/
-    cross-spawn.ts             - Stub for CF Workers (see note below)
+    cross-spawn.ts             - Stub for Vitest bundling of @mastra/mcp (see note below)
   tools/
     conversations.ts           - Conversation-oriented tools (list, read, send)
     index.ts                   - Tool aggregation (createAllTools)
     users.ts                   - Identity (whoami)
   test/
-    env.d.ts                   - Cloudflare test environment types (ProvidedEnv)
+    setup-env.ts               - Loads `.env` for integration tests
     mcp/                       - MCP integration suite factory + per-area test modules
-    server.test.ts             - Sequential integration tests (Workers pool)
+    server.test.ts             - Sequential integration tests
 ```
 
-### CF Workers + @mastra/mcp
+### Vitest + @mastra/mcp
 
-`@mastra/mcp` bundles both MCPClient and MCPServer in a single entry point. MCPClient imports `cross-spawn` → `node:child_process` which is unavailable in CF Workers. The workaround:
-
-- `vitest.config.ts` aliases `cross-spawn` to `src/stubs/cross-spawn.ts`
-- `ssr.noExternal` forces Vite to bundle `@mastra/mcp` so the alias applies
-- `MCPServer.getServer()` returns the underlying SDK Server, which connects to `WebStandardStreamableHTTPServerTransport` (native web standard, no Node.js req/res needed)
+`@mastra/mcp` bundles both MCPClient and MCPServer in a single entry point. MCPClient imports `cross-spawn` → `node:child_process`, which is unnecessary for MCPServer-only usage. For tests, Vitest aliases `cross-spawn` to `src/stubs/cross-spawn.ts` and `ssr.noExternal` forces Vite to bundle `@mastra/mcp` so the alias applies.
 
 ## Commands
 
-- `bun run dev` - Start dev server via wrangler (Cloudflare Workers)
-- `bun run dev:node` - Start dev server via tsx (Node.js)
-- `bun run start` - Start production server (Node.js)
-- `bun run deploy` - Deploy to Cloudflare Workers
+- `bun run dev` - Start dev server with watch (Bun)
+- `bun run dev:tsx` - Start dev server with watch (tsx + `--env-file .env`)
+- `bun run start` - Start production server (Node.js via Bun runtime)
 - `bun run test` - Run tests
 - `bun run test:watch` - Run tests in watch mode
 - `bun run check` - Lint and format check
@@ -69,7 +63,7 @@ Conversations use Matrix room ids exposed as `conversation_id` (DMs, groups, and
 - MCP endpoint: `/mcp` and `/` when `MCP_AUTH_TOKEN` is unset; `/<MCP_AUTH_TOKEN>/mcp` when it is set
 - All Matrix API calls go through custom `MatrixClient` class (typed HTTP wrapper)
 - MatrixClient methods use typed generics (`request<T>`) for all API responses
-- Integration tests run against real Matrix server (no mocking)
+- Integration tests run against real Matrix server (no mocking); the suite creates a dedicated private non-direct test room via `POST /createRoom` so tests do not reuse DMs or existing chats, then leaves and forgets it in `afterAll`
 - MatrixClient auto-retries on 429 rate limits (up to 3 retries, max 10s wait)
 - Object keys should be alphabetically sorted
 - Use `@/` path alias for imports from src

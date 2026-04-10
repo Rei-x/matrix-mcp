@@ -1,13 +1,17 @@
-import { env } from "cloudflare:test";
+import { afterAll } from "vitest";
 
 import { registerConversationTests } from "./mcp/register-conversations";
 import { registerErrorHandlingTests } from "./mcp/register-errors";
 import { registerHttpTransportTests } from "./mcp/register-http";
 import { registerToolListingTests } from "./mcp/register-tool-listing";
-import { createMcpSuite } from "./mcp/suite";
+import { createMcpSuite, testBindingsFromEnv } from "./mcp/suite";
 
 describe.sequential("mcp server", () => {
-  const s = createMcpSuite(env);
+  const s = createMcpSuite(testBindingsFromEnv());
+
+  afterAll(async () => {
+    await s.cleanupSharedRoom();
+  });
 
   test("prepares shared conversation", async () => {
     await s.ensureSharedRoom();

@@ -34,7 +34,7 @@ export const registerErrorHandlingTests = (s: McpSuite): void => {
         method: "tools/call",
         params: { arguments: {}, name: "nonexistent_tool" },
       });
-      const parsed = z.record(z.unknown()).parse(response);
+      const parsed = z.record(z.string(), z.unknown()).parse(response);
       expect(parsed.jsonrpc).toBe("2.0");
       expect(parsed.id).toBe(999);
       expect(rpcIndicatesToolFailure(parsed)).toBeTruthy();

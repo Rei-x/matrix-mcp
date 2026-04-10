@@ -158,13 +158,33 @@ const toConversationSummary = (
   title: conversationTitle(name),
 });
 
+const joinedRoomIdsMatchingQuery = (
+  joinedRooms: string[],
+  q: string
+): string[] => {
+  if (!q.startsWith("!") || q.length <= 1) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const id of joinedRooms) {
+    if (id.toLowerCase().includes(q)) {
+      out.push(id);
+    }
+  }
+  return out;
+};
+
 const listConversationsFiltered = async (
   client: MatrixClient,
   joinedRooms: string[],
   limit: number,
   q: string
 ): Promise<{ conversations: ConversationSummary[]; total_joined: number }> => {
-  const metaList = await collectRoomMeta(client, scanJoinedRooms(joinedRooms));
+  const idsForMeta = new Set<string>(scanJoinedRooms(joinedRooms));
+  for (const id of joinedRoomIdsMatchingQuery(joinedRooms, q)) {
+    idsForMeta.add(id);
+  }
+  const metaList = await collectRoomMeta(client, [...idsForMeta]);
   const candidates = metaList.filter((m) => roomMatchesQuery(m, q));
   const tsMap = await collectLastTsForRooms(
     client,
@@ -272,7 +292,7 @@ const buildReadConversationPayload = async (
 export const createConversationTools = (client: MatrixClient) => ({
   list_conversations: createTool({
     description:
-      "List Matrix conversations (joined rooms: DMs, groups, bridge chats). Sorted by most recent message among up to 200 rooms from your joined list per call (homeserver order). conversation_id is the Matrix room id — use it with read_conversation and send_message. Optional query filters by room name, topic, or id (case-insensitive substring) within that scan window.",
+      "List Matrix conversations (joined rooms: DMs, groups, bridge chats). Sorted by most recent message among up to 200 rooms from your joined list per call (homeserver order). conversation_id is the Matrix room id — use it with read_conversation and send_message. Optional query filters by room name, topic, or id (case-insensitive substring) within that scan window; queries starting with `!` also match room ids outside that window.",
     execute: async (args) => {
       const limit = Math.min(
         Math.max(1, args.limit ?? DEFAULT_LIST_LIMIT),

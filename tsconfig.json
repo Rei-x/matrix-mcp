@@ -1,11 +1,7 @@
 {
   "compilerOptions": {
     // Environment setup & latest features
-    "types": [
-      "@cloudflare/workers-types",
-      "@cloudflare/vitest-pool-workers",
-      "vitest/globals"
-    ],
+    "types": ["@types/bun", "vitest/globals"],
     "lib": ["ESNext"],
     "target": "ESNext",
     "module": "ESNext",

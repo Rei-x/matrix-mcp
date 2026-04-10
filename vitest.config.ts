@@ -1,31 +1,24 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
+import { defineConfig } from "vitest/config";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = import.meta.dirname;
 
-export default defineWorkersConfig({
+export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
-      // Stub cross-spawn which is pulled in by @mastra/mcp's MCPClient stdio transport.
-      // MCPServer (which we use) never calls this code path.
+      // Stub cross-spawn pulled in by @mastra/mcp's MCPClient stdio path (unused by MCPServer).
       "cross-spawn": path.resolve(__dirname, "src/stubs/cross-spawn.ts"),
     },
   },
   ssr: {
-    // Force Vite to bundle these dependencies so the cross-spawn alias applies
     noExternal: ["@mastra/mcp", "@modelcontextprotocol/sdk"],
   },
   test: {
     globals: true,
     hookTimeout: 60_000,
-    poolOptions: {
-      workers: {
-        wrangler: { configPath: "./wrangler.toml" },
-      },
-    },
+    setupFiles: ["./src/test/setup-env.ts"],
     testTimeout: 30_000,
   },
 });

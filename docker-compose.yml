@@ -1,0 +1,10 @@
+services:
+  mcp:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      MATRIX_BASE_URL: ${MATRIX_BASE_URL:?set MATRIX_BASE_URL}
+      MATRIX_ACCESS_TOKEN: ${MATRIX_ACCESS_TOKEN:?set MATRIX_ACCESS_TOKEN}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
