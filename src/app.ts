@@ -1,4 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 import { MCPServer } from "@mastra/mcp";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -19,6 +21,13 @@ const timingSafeEqualString = (a: string, b: string): boolean => {
   }
   return timingSafeEqual(ba, bb);
 };
+
+const FAVICON_ICO_PATH = path.join(
+  import.meta.dirname,
+  "..",
+  "public",
+  "favicon.ico"
+);
 
 const mcpAuthSecretConfigured = (c: Context<AppEnv>): boolean => {
   const t = c.env.MCP_AUTH_TOKEN;
@@ -55,6 +64,20 @@ export const createApp = () => {
       return c.text("ok", 200);
     } catch {
       return c.text("matrix unavailable", 503);
+    }
+  });
+
+  app.get("/favicon.ico", async (c): Promise<Response> => {
+    try {
+      const body = await readFile(FAVICON_ICO_PATH);
+      return new Response(body, {
+        headers: {
+          "Cache-Control": "public, max-age=86400",
+          "Content-Type": "image/x-icon",
+        },
+      });
+    } catch {
+      return c.notFound();
     }
   });
 
