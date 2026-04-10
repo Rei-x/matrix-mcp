@@ -9,10 +9,7 @@ import { MatrixClient } from "@/matrix/client";
 import { createAllTools } from "@/tools";
 
 /** Constant-time comparison for path tokens (mitigates timing leaks). */
-const timingSafeEqualString = async (
-  a: string,
-  b: string
-): Promise<boolean> => {
+const timingSafeEqualString = (a: string, b: string): boolean => {
   const enc = new TextEncoder();
   const ba = enc.encode(a);
   const bb = enc.encode(b);
@@ -69,7 +66,7 @@ export const createApp = () => {
 
   // With MCP_AUTH_TOKEN set: MCP only at `/:token/mcp` (token must match the secret).
   // Without it: `/mcp` and `/` for local dev.
-  app.all("/:token/mcp", async (c) => {
+  app.all("/:token/mcp", (c): Response | Promise<Response> => {
     if (!mcpAuthSecretConfigured(c)) {
       return c.notFound();
     }
@@ -77,20 +74,20 @@ export const createApp = () => {
     if (expected === undefined || expected === "") {
       return c.notFound();
     }
-    if (!(await timingSafeEqualString(c.req.param("token"), expected))) {
+    if (!timingSafeEqualString(c.req.param("token"), expected)) {
       return c.notFound();
     }
     return mcpHandler(c);
   });
 
-  app.all("/mcp", (c) => {
+  app.all("/mcp", (c): Response | Promise<Response> => {
     if (mcpAuthSecretConfigured(c)) {
       return c.notFound();
     }
     return mcpHandler(c);
   });
 
-  app.all("/", (c) => {
+  app.all("/", (c): Response | Promise<Response> => {
     if (mcpAuthSecretConfigured(c)) {
       return c.notFound();
     }

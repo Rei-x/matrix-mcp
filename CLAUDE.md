@@ -17,13 +17,13 @@ src/
   stubs/
     cross-spawn.ts             - Stub for CF Workers (see note below)
   tools/
+    conversations.ts           - Conversation-oriented tools (list, read, send)
     index.ts                   - Tool aggregation (createAllTools)
-    rooms.ts                   - Room management tools (Mastra createTool)
-    messages.ts                - Message tools (Mastra createTool)
-    users.ts                   - User tools (Mastra createTool)
+    users.ts                   - Identity (whoami)
   test/
-    env.d.ts                   - Cloudflare test environment types
-    server.test.ts             - Integration tests via Workers pool
+    env.d.ts                   - Cloudflare test environment types (ProvidedEnv)
+    mcp/                       - MCP integration suite factory + per-area test modules
+    server.test.ts             - Sequential integration tests (Workers pool)
 ```
 
 ### CF Workers + @mastra/mcp
@@ -53,31 +53,12 @@ src/
 
 ## MCP Tools
 
-### Room Management
+Conversations use Matrix room ids exposed as `conversation_id` (DMs, groups, and bridge chats).
 
-- `list_rooms` - List joined rooms with pagination (limit, offset)
-- `get_room_info` - Get room details (name, topic, members)
-- `search_public_rooms` - Search/list public rooms
-- `join_room` - Join a room by ID or alias
-- `leave_room` - Leave a room
-- `create_room` - Create a new room (private, public, or DM)
-- `invite_user` - Invite a user to a room
-- `set_room_topic` - Set or update a room's topic
-
-### Messages
-
-- `read_messages` - Read messages with pagination
-- `send_message` - Send a text message
-- `reply_to_message` - Reply to a specific message (threaded reply)
-- `send_reaction` - React to a message with an emoji
-- `redact_message` - Delete/redact a message
-- `send_read_receipt` - Mark a message as read
-
-### Users
-
-- `whoami` - Get current user identity
-- `search_users` - Search user directory
-- `get_user_profile` - Get user display name
+- `whoami` - Authenticated Matrix `user_id` only
+- `list_conversations` - Joined chats, newest activity first within a cap of 200 rooms per call (homeserver order of `/joined_rooms`); optional `query` filters name/topic/id (substring) in that window; default limit 15
+- `read_conversation` - Recent messages as one `transcript` (oldest→newest in page); optional `include_event_ids` for replies; `from` + `next_batch` for pagination
+- `send_message` - Send text to `conversation_id`; optional `reply_to_event_id` for threaded reply
 
 ## Conventions
 
