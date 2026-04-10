@@ -9,7 +9,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 
 import type { AppEnv } from "@/env";
-import { MatrixClient } from "@/matrix/client";
+import type { MatrixToolClient } from "@/matrix/client";
 import { createAllTools } from "@/tools";
 
 /** Constant-time comparison for path tokens (mitigates timing leaks). */
@@ -34,10 +34,8 @@ const mcpAuthSecretConfigured = (c: Context<AppEnv>): boolean => {
   return t !== undefined && t !== "";
 };
 
-export const createMCPServer = (env: AppEnv["Bindings"]) => {
-  const client = new MatrixClient(env.MATRIX_BASE_URL, env.MATRIX_ACCESS_TOKEN);
+export const createMCPServer = (client: MatrixToolClient) => {
   const tools = createAllTools(client);
-
   return new MCPServer({
     id: "mcp-server-matrix",
     name: "mcp-server-matrix",
@@ -46,22 +44,13 @@ export const createMCPServer = (env: AppEnv["Bindings"]) => {
   });
 };
 
-export const createApp = () => {
+export const createApp = (client: MatrixToolClient) => {
   const app = new Hono<AppEnv>();
-  app.get("/health", async (c): Promise<Response> => {
-    const { MATRIX_ACCESS_TOKEN, MATRIX_BASE_URL } = c.env;
-    if (
-      MATRIX_BASE_URL === "" ||
-      MATRIX_ACCESS_TOKEN === "" ||
-      MATRIX_BASE_URL === undefined ||
-      MATRIX_ACCESS_TOKEN === undefined
-    ) {
-      return c.text("matrix not configured", 503);
-    }
+
+  app.get("/health", (c): Response => {
     try {
-      const client = new MatrixClient(MATRIX_BASE_URL, MATRIX_ACCESS_TOKEN);
-      await client.whoAmI();
-      return c.text("ok", 200);
+      const me = client.whoAmI();
+      return c.text(`ok ${me.user_id}`, 200);
     } catch {
       return c.text("matrix unavailable", 503);
     }
@@ -98,7 +87,10 @@ export const createApp = () => {
   );
 
   const mcpHandler = async (c: Context<AppEnv>) => {
-    const mcpServer = createMCPServer(c.env);
+    // The underlying MCP SDK Server can only be connected to one transport at
+    // a time, so build a fresh server (and tool wiring) per request. Tool
+    // construction is cheap since the Matrix client is already synced.
+    const mcpServer = createMCPServer(client);
     const sdkServer = mcpServer.getServer();
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: true,

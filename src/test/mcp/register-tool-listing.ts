@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 
 import {
   toolListResultSchema,
@@ -37,9 +36,7 @@ export const registerToolListingTests = (s: McpSuite): void => {
   describe("whoami", () => {
     it("should return current user id only", async () => {
       await s.ensureSharedRoom();
-      const who = z
-        .object({ user_id: z.string() })
-        .parse(await s.callTool("whoami"));
+      const who = await s.callTool("whoami");
       expect(who.user_id).toBe("@rei:matrix.suzuya.dev");
     });
   });

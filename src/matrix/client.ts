@@ -1,505 +1,310 @@
-import { setTimeout as sleepTimer } from "node:timers/promises";
+import * as sdk from "matrix-js-sdk";
+import { logger as sdkLogger } from "matrix-js-sdk/lib/logger.js";
 
-// --- Response types ---
+// matrix-js-sdk uses loglevel internally; silence its noisy default output.
+/* eslint-disable @typescript-eslint/no-deprecated, @typescript-eslint/no-unsafe-type-assertion -- loglevel API not in typings; the deprecated `logger` constant is the only handle on the underlying loglevel singleton */
+(sdkLogger as unknown as { disableAll: () => void }).disableAll();
+/* eslint-enable @typescript-eslint/no-deprecated, @typescript-eslint/no-unsafe-type-assertion */
 
-export interface WhoAmIResponse {
-  device_id: string;
-  is_guest: boolean;
-  user_id: string;
+// --- Public types ---
+
+export interface RoomSummary {
+  last_message_ts: number | null;
+  name: string | null;
+  room_id: string;
+  topic: string | null;
 }
 
-export interface JoinedRoomsResponse {
-  joined_rooms: string[];
-}
-
-export interface RoomNameContent {
-  name: string;
-}
-
-export interface RoomTopicContent {
-  topic: string;
-}
-
-export interface RoomMember {
-  content: {
-    avatar_url?: string;
-    displayname?: string;
-    membership: string;
-  };
-  state_key: string;
-  type: string;
-}
-
-export interface RoomMembersResponse {
-  chunk: RoomMember[];
-}
-
-export interface MatrixEvent {
-  content: Record<string, unknown>;
+export interface MessageEvent {
+  body: string;
   event_id: string;
   origin_server_ts: number;
-  room_id?: string;
   sender: string;
-  type: string;
 }
 
-export interface RoomMessagesResponse {
-  chunk: MatrixEvent[];
-  end?: string;
-  start: string;
-}
-
-export interface UserDirectoryResult {
-  avatar_url?: string;
-  display_name?: string;
-  user_id: string;
-}
-
-export interface UserDirectoryResponse {
-  limited: boolean;
-  results: UserDirectoryResult[];
-}
-
-export interface PublicRoomsChunk {
-  avatar_url?: string;
-  canonical_alias?: string;
-  name?: string;
-  num_joined_members: number;
-  room_id: string;
-  topic?: string;
-}
-
-export interface PublicRoomsResponse {
-  chunk: PublicRoomsChunk[];
+export interface MessagePage {
+  events: MessageEvent[];
   next_batch?: string;
-  total_room_count_estimate?: number;
 }
 
 export interface SendEventResponse {
   event_id: string;
 }
 
-export interface CreateRoomResponse {
-  room_id: string;
+export interface CreateRoomOptions {
+  invite?: string[];
+  is_direct?: boolean;
+  name?: string;
+  preset?: sdk.Preset;
+  topic?: string;
 }
 
-export interface ProfileInfoResponse {
-  avatar_url?: string;
-  displayname?: string;
+/**
+ * The minimal surface the MCP tools depend on. Both the real `MatrixClient`
+ * (matrix-js-sdk-backed) and any test/eval fixture must implement this.
+ */
+export interface MatrixToolClient {
+  whoAmI(): { user_id: string };
+  listJoinedRooms(): RoomSummary[];
+  readMessages(
+    roomId: string,
+    options?: { from?: string; limit?: number }
+  ): Promise<MessagePage>;
+  sendText(roomId: string, body: string): Promise<SendEventResponse>;
+  sendReply(
+    roomId: string,
+    inReplyToEventId: string,
+    body: string
+  ): Promise<SendEventResponse>;
 }
 
 // --- Helpers ---
 
-interface MatrixRequestContext {
-  accessToken: string;
-  baseUrl: string;
-}
+const MEMBERSHIP_JOIN = "join";
 
-const buildRequestHeaders = (
-  accessToken: string,
-  body?: Record<string, unknown>
-): Record<string, string> => {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${accessToken}`,
-  };
-  if (body) {
-    headers["Content-Type"] = "application/json";
+const isJoined = (room: sdk.Room): boolean =>
+  room.getMyMembership() === MEMBERSHIP_JOIN;
+
+const stateString = (
+  room: sdk.Room,
+  type: string,
+  field: string
+): string | null => {
+  const liveState = room.getLiveTimeline().getState(sdk.EventTimeline.FORWARDS);
+  if (liveState === undefined) {
+    return null;
   }
-  return headers;
-};
-
-const buildRequestUrl = (
-  baseUrl: string,
-  path: string,
-  query?: Record<string, string>
-): URL => {
-  const url = new URL(`/_matrix/client/v3${path}`, baseUrl);
-  if (query) {
-    for (const [k, v] of Object.entries(query)) {
-      url.searchParams.set(k, v);
-    }
+  const event = liveState.getStateEvents(type, "");
+  if (event === null) {
+    return null;
   }
-  return url;
-};
-
-const parseJsonOrThrow = async <T>(response: Response): Promise<T> => {
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Matrix API error ${response.status}: ${text}`);
+  const content: Record<string, unknown> = event.getContent();
+  const value = content[field];
+  if (typeof value !== "string") {
+    return null;
   }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Matrix responses are caller-typed per endpoint
-  return (await response.json()) as T;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
 };
 
-const sleep = async (ms: number): Promise<void> => {
-  await sleepTimer(ms);
+const roomNameOf = (room: sdk.Room): string | null => {
+  const trimmed = room.name?.trim();
+  return trimmed !== undefined && trimmed !== "" ? trimmed : null;
 };
 
-const retryAfterMsFrom429Body = (raw: unknown): number | undefined => {
-  if (typeof raw !== "object" || raw === null || !("retry_after_ms" in raw)) {
-    return undefined;
+const roomLastTsOf = (room: sdk.Room): number | null => {
+  const ts = room.getLastActiveTimestamp();
+  return typeof ts === "number" && ts > 0 ? ts : null;
+};
+
+const summarizeRoom = (room: sdk.Room): RoomSummary => ({
+  last_message_ts: roomLastTsOf(room),
+  name: roomNameOf(room),
+  room_id: room.roomId,
+  topic: stateString(room, "m.room.topic", "topic"),
+});
+
+const formatMatrixError = (err: unknown): Error => {
+  if (err instanceof sdk.MatrixError) {
+    const status = err.httpStatus ?? "?";
+    const code = err.errcode ?? "M_UNKNOWN";
+    const detail = err.data?.error ?? err.message;
+    return new Error(`Matrix API error ${status}: ${code} ${detail}`);
   }
-  const ms = Reflect.get(raw, "retry_after_ms");
-  return typeof ms === "number" ? ms : undefined;
-};
-
-const matrixRequest = async <T>(
-  ctx: MatrixRequestContext,
-  method: string,
-  path: string,
-  body?: Record<string, unknown>,
-  query?: Record<string, string>,
-  retries = 3
-): Promise<T> => {
-  const url = buildRequestUrl(ctx.baseUrl, path, query);
-  const headers = buildRequestHeaders(ctx.accessToken, body);
-  const response = await fetch(url.toString(), {
-    body: body ? JSON.stringify(body) : undefined,
-    headers,
-    method,
-  });
-
-  if (response.status === 429 && retries > 0) {
-    const waitMs = Math.min(
-      retryAfterMsFrom429Body(await response.json()) ?? 3000,
-      5000
-    );
-    await sleep(waitMs);
-    return matrixRequest<T>(ctx, method, path, body, query, retries - 1);
+  if (err instanceof Error) {
+    return new Error(`Matrix API error: ${err.message}`);
   }
-
-  return parseJsonOrThrow<T>(response);
+  return new Error(`Matrix API error: ${String(err)}`);
 };
 
-const roomPath = (roomId: string): string =>
-  `/rooms/${encodeURIComponent(roomId)}`;
+const wrap = async <T>(promise: Promise<T>): Promise<T> => {
+  try {
+    return await promise;
+  } catch (error) {
+    throw formatMatrixError(error);
+  }
+};
 
 // --- Client ---
 
-export class MatrixClient {
-  private readonly baseUrl: string;
-  private readonly accessToken: string;
+export class MatrixClient implements MatrixToolClient {
+  private readonly sdkClient: sdk.MatrixClient;
+  private startPromise: Promise<void> | null = null;
 
   constructor(baseUrl: string, accessToken: string) {
-    this.baseUrl = baseUrl;
-    this.accessToken = accessToken;
+    this.sdkClient = sdk.createClient({
+      accessToken,
+      baseUrl,
+    });
   }
 
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: Record<string, unknown>,
-    query?: Record<string, string>,
-    retries = 3
-  ): Promise<T> {
-    const out = await matrixRequest<T>(
-      { accessToken: this.accessToken, baseUrl: this.baseUrl },
-      method,
-      path,
-      body,
-      query,
-      retries
-    );
-    return out;
+  /** Begin syncing and resolve once the initial sync (PREPARED) completes. */
+  async start(): Promise<void> {
+    this.startPromise ??= this.startInternal();
+    await this.startPromise;
+  }
+
+  private async startInternal(): Promise<void> {
+    // Establish our user id before sync starts so the SDK can build Room
+    // objects with correct membership for the syncing user.
+    if (this.sdkClient.getUserId() === null) {
+      const me = await wrap(this.sdkClient.whoami());
+      this.sdkClient.credentials.userId = me.user_id;
+    }
+    const { promise, resolve, reject } = Promise.withResolvers<null>();
+    // eslint-disable-next-line promise/prefer-await-to-callbacks -- bridging matrix-js-sdk's event-driven sync lifecycle into a promise
+    const onSync = (
+      state: sdk.SyncState,
+      _prev: sdk.SyncState | null,
+      data?: sdk.SyncStateData
+    ): void => {
+      if (state === sdk.SyncState.Prepared || state === sdk.SyncState.Syncing) {
+        resolve(null);
+        return;
+      }
+      if (state === sdk.SyncState.Error) {
+        reject(data?.error ?? new Error("Initial Matrix sync failed"));
+      }
+    };
+    this.sdkClient.on(sdk.ClientEvent.Sync, onSync);
+    try {
+      await this.sdkClient.startClient({ initialSyncLimit: 20 });
+      await promise;
+    } finally {
+      this.sdkClient.off(sdk.ClientEvent.Sync, onSync);
+    }
+  }
+
+  stop(): void {
+    this.sdkClient.stopClient();
+    this.startPromise = null;
   }
 
   // --- Identity ---
 
-  async whoAmI(): Promise<WhoAmIResponse> {
-    const out = await this.request<WhoAmIResponse>("GET", "/account/whoami");
-    return out;
+  whoAmI(): { user_id: string } {
+    return { user_id: this.sdkClient.getSafeUserId() };
   }
 
-  // --- Room state ---
+  // --- Rooms (read from synced in-memory state) ---
 
-  async getJoinedRooms(): Promise<JoinedRoomsResponse> {
-    const out = await this.request<JoinedRoomsResponse>("GET", "/joined_rooms");
-    return out;
+  listJoinedRooms(): RoomSummary[] {
+    return this.sdkClient.getRooms().filter(isJoined).map(summarizeRoom);
   }
 
-  async getRoomName(roomId: string): Promise<string | null> {
-    try {
-      const result = await this.request<RoomNameContent>(
-        "GET",
-        `${roomPath(roomId)}/state/m.room.name`
-      );
-      return result.name;
-    } catch {
+  getRoom(roomId: string): RoomSummary | null {
+    const room = this.sdkClient.getRoom(roomId);
+    if (room === null || !isJoined(room)) {
       return null;
     }
+    return summarizeRoom(room);
   }
 
-  async getRoomTopic(roomId: string): Promise<string | null> {
-    try {
-      const result = await this.request<RoomTopicContent>(
-        "GET",
-        `${roomPath(roomId)}/state/m.room.topic`
-      );
-      return result.topic;
-    } catch {
-      return null;
+  /**
+   * Resolve once a room appears in the synced in-memory state. Useful in tests
+   * after createRoom: the room only enters the store on the next /sync tick.
+   */
+  async waitForRoom(roomId: string, timeoutMs = 10_000): Promise<void> {
+    if (this.sdkClient.getRoom(roomId) !== null) {
+      return;
     }
-  }
-
-  async getRoomMembers(
-    roomId: string,
-    membership?: string
-  ): Promise<RoomMembersResponse> {
-    const query: Record<string, string> = {};
-    if (membership !== undefined && membership !== "") {
-      query.membership = membership;
-    }
-    const out = await this.request<RoomMembersResponse>(
-      "GET",
-      `${roomPath(roomId)}/members`,
-      undefined,
-      query
-    );
-    return out;
-  }
-
-  async setRoomTopic(roomId: string, topic: string): Promise<void> {
-    await this.request<Record<string, never>>(
-      "PUT",
-      `${roomPath(roomId)}/state/m.room.topic`,
-      { topic }
-    );
+    const client = this.sdkClient;
+    const { promise, resolve, reject } = Promise.withResolvers<null>();
+    const handle: { timer: ReturnType<typeof setTimeout> | null } = {
+      timer: null,
+    };
+    // eslint-disable-next-line promise/prefer-await-to-callbacks -- bridging matrix-js-sdk's Room event into a promise
+    const onRoom = (room: sdk.Room): void => {
+      if (room.roomId !== roomId) {
+        return;
+      }
+      if (handle.timer !== null) {
+        clearTimeout(handle.timer);
+      }
+      client.off(sdk.ClientEvent.Room, onRoom);
+      resolve(null);
+    };
+    handle.timer = setTimeout(() => {
+      client.off(sdk.ClientEvent.Room, onRoom);
+      reject(new Error(`Timed out waiting for room ${roomId}`));
+    }, timeoutMs);
+    client.on(sdk.ClientEvent.Room, onRoom);
+    await promise;
   }
 
   // --- Messages ---
 
-  async getRoomMessages(
+  async readMessages(
     roomId: string,
-    options: {
-      dir?: "b" | "f";
-      filter?: string;
-      from?: string;
-      limit?: number;
-    } = {}
-  ): Promise<RoomMessagesResponse> {
-    const query: Record<string, string> = {
-      dir: options.dir ?? "b",
-      limit: String(options.limit ?? 50),
+    options: { from?: string; limit?: number } = {}
+  ): Promise<MessagePage> {
+    const limit = options.limit ?? 50;
+    const filter = new sdk.Filter(this.sdkClient.getUserId());
+    filter.setDefinition({
+      room: { timeline: { types: ["m.room.message"] } },
+    });
+    const result = await wrap(
+      this.sdkClient.createMessagesRequest(
+        roomId,
+        options.from ?? null,
+        limit,
+        sdk.Direction.Backward,
+        filter
+      )
+    );
+    const events: MessageEvent[] = [];
+    for (const ev of result.chunk) {
+      const { body } = ev.content as Record<string, unknown>;
+      if (typeof body !== "string" || body === "") {
+        continue;
+      }
+      events.push({
+        body,
+        event_id: ev.event_id,
+        origin_server_ts: ev.origin_server_ts,
+        sender: ev.sender,
+      });
+    }
+    return {
+      events,
+      ...(typeof result.end === "string" ? { next_batch: result.end } : {}),
     };
-    if (options.from !== undefined && options.from !== "") {
-      query.from = options.from;
-    }
-    if (options.filter !== undefined && options.filter !== "") {
-      query.filter = options.filter;
-    }
-    const out = await this.request<RoomMessagesResponse>(
-      "GET",
-      `${roomPath(roomId)}/messages`,
-      undefined,
-      query
-    );
-    return out;
   }
 
-  async getLastMessageTimestamp(roomId: string): Promise<number | null> {
-    try {
-      const result = await this.getRoomMessages(roomId, { limit: 1 });
-      const [firstEvent] = result.chunk;
-      if (firstEvent !== undefined) {
-        return firstEvent.origin_server_ts;
-      }
-      return null;
-    } catch {
-      return null;
-    }
+  async sendText(roomId: string, body: string): Promise<SendEventResponse> {
+    const result = await wrap(this.sdkClient.sendTextMessage(roomId, body));
+    return { event_id: result.event_id };
   }
 
-  async sendMessage(
+  async sendReply(
     roomId: string,
-    body: string,
-    msgtype = "m.text"
-  ): Promise<SendEventResponse> {
-    const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const out = await this.request<SendEventResponse>(
-      "PUT",
-      `${roomPath(roomId)}/send/m.room.message/${txnId}`,
-      { body, msgtype }
-    );
-    return out;
-  }
-
-  async sendReaction(
-    roomId: string,
-    eventId: string,
-    reaction: string
-  ): Promise<SendEventResponse> {
-    const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const out = await this.request<SendEventResponse>(
-      "PUT",
-      `${roomPath(roomId)}/send/m.reaction/${txnId}`,
-      {
-        "m.relates_to": {
-          event_id: eventId,
-          key: reaction,
-          rel_type: "m.annotation",
-        },
-      }
-    );
-    return out;
-  }
-
-  async replyToMessage(
-    roomId: string,
-    eventId: string,
+    inReplyToEventId: string,
     body: string
   ): Promise<SendEventResponse> {
-    const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const out = await this.request<SendEventResponse>(
-      "PUT",
-      `${roomPath(roomId)}/send/m.room.message/${txnId}`,
-      {
+    const result = await wrap(
+      this.sdkClient.sendMessage(roomId, {
         body,
         "m.relates_to": {
-          "m.in_reply_to": {
-            event_id: eventId,
-          },
+          "m.in_reply_to": { event_id: inReplyToEventId },
         },
-        msgtype: "m.text",
-      }
+        msgtype: sdk.MsgType.Text,
+      })
     );
-    return out;
+    return { event_id: result.event_id };
   }
 
-  async redactEvent(
-    roomId: string,
-    eventId: string,
-    reason?: string
-  ): Promise<SendEventResponse> {
-    const txnId = `mcp_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const body = reason !== undefined && reason !== "" ? { reason } : {};
-    const out = await this.request<SendEventResponse>(
-      "PUT",
-      `${roomPath(roomId)}/redact/${encodeURIComponent(eventId)}/${txnId}`,
-      body
-    );
-    return out;
-  }
+  // --- Test/admin helpers ---
 
-  async sendReadReceipt(roomId: string, eventId: string): Promise<void> {
-    await this.request<Record<string, never>>(
-      "POST",
-      `${roomPath(roomId)}/receipt/m.read/${encodeURIComponent(eventId)}`,
-      {}
-    );
-  }
-
-  // --- Room management ---
-
-  async createRoom(options: {
-    invite?: string[];
-    is_direct?: boolean;
-    name?: string;
-    preset?: "private_chat" | "public_chat" | "trusted_private_chat";
-    topic?: string;
-  }): Promise<CreateRoomResponse> {
-    const out = await this.request<CreateRoomResponse>(
-      "POST",
-      "/createRoom",
-      options
-    );
-    return out;
-  }
-
-  async joinRoom(roomIdOrAlias: string): Promise<{ room_id: string }> {
-    const out = await this.request<{ room_id: string }>(
-      "POST",
-      `/join/${encodeURIComponent(roomIdOrAlias)}`,
-      {}
-    );
-    return out;
+  async createRoom(options: CreateRoomOptions): Promise<{ room_id: string }> {
+    const result = await wrap(this.sdkClient.createRoom(options));
+    return { room_id: result.room_id };
   }
 
   async leaveRoom(roomId: string): Promise<void> {
-    await this.request<Record<string, never>>(
-      "POST",
-      `${roomPath(roomId)}/leave`,
-      {}
-    );
+    await wrap(this.sdkClient.leave(roomId));
   }
 
   async forgetRoom(roomId: string): Promise<void> {
-    await this.request<Record<string, never>>(
-      "POST",
-      `${roomPath(roomId)}/forget`,
-      {}
-    );
-  }
-
-  async inviteUser(roomId: string, userId: string): Promise<void> {
-    await this.request<Record<string, never>>(
-      "POST",
-      `${roomPath(roomId)}/invite`,
-      { user_id: userId }
-    );
-  }
-
-  // --- Users ---
-
-  async getDisplayName(userId: string): Promise<string | null> {
-    try {
-      const result = await this.request<ProfileInfoResponse>(
-        "GET",
-        `/profile/${encodeURIComponent(userId)}/displayname`
-      );
-      return result.displayname ?? null;
-    } catch {
-      return null;
-    }
-  }
-
-  async searchUserDirectory(
-    searchTerm: string,
-    limit = 10
-  ): Promise<UserDirectoryResponse> {
-    const out = await this.request<UserDirectoryResponse>(
-      "POST",
-      "/user_directory/search",
-      {
-        limit,
-        search_term: searchTerm,
-      }
-    );
-    return out;
-  }
-
-  // --- Public rooms ---
-
-  async getPublicRooms(
-    options: {
-      limit?: number;
-      searchTerm?: string;
-      since?: string;
-    } = {}
-  ): Promise<PublicRoomsResponse> {
-    if (options.searchTerm !== undefined && options.searchTerm !== "") {
-      const postOut = await this.request<PublicRoomsResponse>(
-        "POST",
-        "/publicRooms",
-        {
-          filter: { generic_search_term: options.searchTerm },
-          limit: options.limit ?? 20,
-          since: options.since,
-        }
-      );
-      return postOut;
-    }
-    const query: Record<string, string> = {
-      limit: String(options.limit ?? 20),
-    };
-    if (options.since !== undefined && options.since !== "") {
-      query.since = options.since;
-    }
-    const getOut = await this.request<PublicRoomsResponse>(
-      "GET",
-      "/publicRooms",
-      undefined,
-      query
-    );
-    return getOut;
+    await wrap(this.sdkClient.forget(roomId));
   }
 }

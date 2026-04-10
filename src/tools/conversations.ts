@@ -1,91 +1,31 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
-import type { MatrixClient, MatrixEvent } from "@/matrix/client";
+import type {
+  MatrixToolClient,
+  MessageEvent,
+  RoomSummary,
+} from "@/matrix/client";
 
-const ROOM_BATCH = 10;
 const DEFAULT_LIST_LIMIT = 15;
-/**
- * Max joined rooms to load metadata / last-activity for per list call. The
- * homeserver order of `joined_rooms` is undefined; narrow `query` if a chat
- * is missing from the default list.
- */
-const LIST_JOINED_ROOM_SCAN_CAP = 200;
 const MAX_LIST_LIMIT = 50;
 const DEFAULT_READ_LIMIT = 20;
 const MAX_READ_LIMIT = 50;
 
-const scanJoinedRooms = (joinedRooms: string[]): string[] =>
-  joinedRooms.slice(0, Math.min(joinedRooms.length, LIST_JOINED_ROOM_SCAN_CAP));
-
-interface RoomMeta {
-  name: string | null;
-  room_id: string;
-  topic: string | null;
-}
-
-interface RoomWithLastTs extends RoomMeta {
-  last_message_ts: number | null;
-}
-
-const fetchRoomMetaBatch = async (
-  client: MatrixClient,
-  roomIds: string[]
-): Promise<RoomMeta[]> => {
-  const metas = await Promise.all(
-    roomIds.map(async (roomId) => {
-      const [name, topic] = await Promise.all([
-        client.getRoomName(roomId),
-        client.getRoomTopic(roomId),
-      ]);
-      return { name, room_id: roomId, topic };
-    })
-  );
-  return metas;
+const conversationTitle = (name: string | null): string => {
+  const trimmed = name?.trim();
+  return trimmed !== undefined && trimmed !== "" ? trimmed : "Unnamed chat";
 };
 
-const collectRoomMeta = async (
-  client: MatrixClient,
-  roomIds: string[]
-): Promise<RoomMeta[]> => {
-  const acc: RoomMeta[] = [];
-  for (let i = 0; i < roomIds.length; i += ROOM_BATCH) {
-    const batch = roomIds.slice(i, i + ROOM_BATCH);
-    acc.push(...(await fetchRoomMetaBatch(client, batch)));
-  }
-  return acc;
+const roomMatchesQuery = (room: RoomSummary, q: string): boolean => {
+  const hay = [room.room_id, room.name ?? "", room.topic ?? ""]
+    .join("\n")
+    .toLowerCase();
+  return hay.includes(q);
 };
 
-const fetchLastTsBatch = async (
-  client: MatrixClient,
-  roomIds: string[]
-): Promise<Map<string, number | null>> => {
-  const pairs = await Promise.all(
-    roomIds.map(async (roomId) => {
-      const ts = await client.getLastMessageTimestamp(roomId);
-      return [roomId, ts] as const;
-    })
-  );
-  return new Map(pairs);
-};
-
-const collectLastTsForRooms = async (
-  client: MatrixClient,
-  roomIds: string[]
-): Promise<Map<string, number | null>> => {
-  const map = new Map<string, number | null>();
-  for (let i = 0; i < roomIds.length; i += ROOM_BATCH) {
-    const batch = roomIds.slice(i, i + ROOM_BATCH);
-    const partial = await fetchLastTsBatch(client, batch);
-    for (const [k, v] of partial) {
-      map.set(k, v);
-    }
-  }
-  return map;
-};
-
-const sortByRecentTimestamp = (rows: RoomWithLastTs[]): void => {
-  rows.sort((a, b) => {
+const sortByRecentTimestamp = (rooms: RoomSummary[]): RoomSummary[] =>
+  [...rooms].toSorted((a, b) => {
     if (a.last_message_ts === null && b.last_message_ts === null) {
       return 0;
     }
@@ -97,46 +37,16 @@ const sortByRecentTimestamp = (rows: RoomWithLastTs[]): void => {
     }
     return b.last_message_ts - a.last_message_ts;
   });
-};
-
-const conversationTitle = (name: string | null): string => {
-  const t = name?.trim();
-  return t !== undefined && t !== "" ? t : "Unnamed chat";
-};
-
-const roomMatchesQuery = (meta: RoomMeta, q: string): boolean => {
-  const hay = [meta.room_id, meta.name ?? "", meta.topic ?? ""]
-    .join("\n")
-    .toLowerCase();
-  return hay.includes(q);
-};
-
-const stringFromMatrixContent = (value: unknown, fallback: string): string => {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value === undefined || value === null) {
-    return fallback;
-  }
-  return JSON.stringify(value);
-};
 
 const senderLocalpart = (mxid: string): string => {
   const m = /^@([^:]+):/.exec(mxid);
   return m?.[1] ?? mxid;
 };
 
-const transcriptLine = (
-  event: MatrixEvent,
-  includeEventIds: boolean
-): string => {
+const transcriptLine = (event: MessageEvent): string => {
   const time = new Date(event.origin_server_ts).toISOString();
-  const body = stringFromMatrixContent(event.content.body, "");
   const sender = senderLocalpart(event.sender);
-  if (includeEventIds) {
-    return `${time} ${sender} [${event.event_id}]: ${body}`;
-  }
-  return `${time} ${sender}: ${body}`;
+  return `${time} ${sender} [${event.event_id}]: ${event.body}`;
 };
 
 const conversationSummarySchema = z.object({
@@ -147,173 +57,59 @@ const conversationSummarySchema = z.object({
 
 type ConversationSummary = z.infer<typeof conversationSummarySchema>;
 
-const toConversationSummary = (
-  room_id: string,
-  last_message_ts: number | null,
-  name: string | null
-): ConversationSummary => ({
-  conversation_id: room_id,
+const toConversationSummary = (room: RoomSummary): ConversationSummary => ({
+  conversation_id: room.room_id,
   last_activity:
-    last_message_ts === null ? null : new Date(last_message_ts).toISOString(),
-  title: conversationTitle(name),
+    room.last_message_ts === null
+      ? null
+      : new Date(room.last_message_ts).toISOString(),
+  title: conversationTitle(room.name),
 });
 
-const joinedRoomIdsMatchingQuery = (
-  joinedRooms: string[],
-  q: string
-): string[] => {
-  if (!q.startsWith("!") || q.length <= 1) {
-    return [];
-  }
-  const out: string[] = [];
-  for (const id of joinedRooms) {
-    if (id.toLowerCase().includes(q)) {
-      out.push(id);
-    }
-  }
-  return out;
-};
+const clampLimit = (
+  value: number | undefined,
+  defaultValue: number,
+  max: number
+): number => Math.min(Math.max(1, value ?? defaultValue), max);
 
-const listConversationsFiltered = async (
-  client: MatrixClient,
-  joinedRooms: string[],
-  limit: number,
-  q: string
-): Promise<{ conversations: ConversationSummary[]; total_joined: number }> => {
-  const idsForMeta = new Set<string>(scanJoinedRooms(joinedRooms));
-  for (const id of joinedRoomIdsMatchingQuery(joinedRooms, q)) {
-    idsForMeta.add(id);
-  }
-  const metaList = await collectRoomMeta(client, [...idsForMeta]);
-  const candidates = metaList.filter((m) => roomMatchesQuery(m, q));
-  const tsMap = await collectLastTsForRooms(
-    client,
-    candidates.map((m) => m.room_id)
-  );
-  const rows: RoomWithLastTs[] = candidates.map((m) => ({
-    ...m,
-    last_message_ts: tsMap.get(m.room_id) ?? null,
-  }));
-  sortByRecentTimestamp(rows);
-  const conversations = rows
-    .slice(0, limit)
-    .map((r) => toConversationSummary(r.room_id, r.last_message_ts, r.name));
-  return { conversations, total_joined: joinedRooms.length };
-};
-
-const listConversationsUnfiltered = async (
-  client: MatrixClient,
-  joinedRooms: string[],
-  limit: number
-): Promise<{ conversations: ConversationSummary[]; total_joined: number }> => {
-  const scanIds = scanJoinedRooms(joinedRooms);
-  const tsMap = await collectLastTsForRooms(client, scanIds);
-  const stubRows: RoomWithLastTs[] = scanIds.map((room_id) => ({
-    last_message_ts: tsMap.get(room_id) ?? null,
-    name: null,
-    room_id,
-    topic: null,
-  }));
-  sortByRecentTimestamp(stubRows);
-  const top = stubRows.slice(0, limit);
-  const metaForTop = await collectRoomMeta(
-    client,
-    top.map((r) => r.room_id)
-  );
-  const metaById = new Map(metaForTop.map((m) => [m.room_id, m]));
-  const conversations = top.map((r) =>
-    toConversationSummary(
-      r.room_id,
-      r.last_message_ts,
-      metaById.get(r.room_id)?.name ?? null
-    )
-  );
-  return { conversations, total_joined: joinedRooms.length };
-};
-
-const listConversationsPayload = async (
-  client: MatrixClient,
-  joinedRooms: string[],
-  limit: number,
-  query?: string
-): Promise<{ conversations: ConversationSummary[]; total_joined: number }> => {
-  const q = query?.trim().toLowerCase();
-  if (q !== undefined && q !== "") {
-    const filtered = await listConversationsFiltered(
-      client,
-      joinedRooms,
-      limit,
-      q
-    );
-    return filtered;
-  }
-  const unfiltered = await listConversationsUnfiltered(
-    client,
-    joinedRooms,
-    limit
-  );
-  return unfiltered;
-};
-
-const buildReadConversationPayload = async (
-  client: MatrixClient,
-  conversationId: string,
-  options: {
-    from?: string;
-    include_event_ids?: boolean;
-    limit: number;
-  }
-) => {
-  const result = await client.getRoomMessages(conversationId, {
-    dir: "b",
-    filter: JSON.stringify({ types: ["m.room.message"] }),
-    from: options.from,
-    limit: options.limit,
-  });
-  const chronological = result.chunk.toReversed();
-  const includeIds = options.include_event_ids ?? false;
-  const lines = chronological
-    .map((event) => {
-      const body = stringFromMatrixContent(event.content.body, "");
-      if (body === "") {
-        return null;
-      }
-      return transcriptLine(event, includeIds);
-    })
-    .filter((line): line is string => line !== null);
-  return {
-    conversation_id: conversationId,
-    message_count: lines.length,
-    next_batch: result.end,
-    transcript: lines.join("\n"),
-  };
-};
-
-export const createConversationTools = (client: MatrixClient) => ({
+export const createConversationTools = (client: MatrixToolClient) => ({
   list_conversations: createTool({
-    description:
-      "List Matrix conversations (joined rooms: DMs, groups, bridge chats). Sorted by most recent message among up to 200 rooms from your joined list per call (homeserver order). conversation_id is the Matrix room id — use it with read_conversation and send_message. Optional query filters by room name, topic, or id (case-insensitive substring) within that scan window; queries starting with `!` also match room ids outside that window.",
+    description: [
+      "Lists your Matrix chats (1:1 DMs, group rooms, and bridge bots), most recently active first.",
+      "Each entry has a `conversation_id` (pass to `read_conversation` or `send_message`), a human `title`, and `last_activity` (ISO timestamp or null if the room has no messages).",
+      "Use `query` to find a chat by case-insensitive substring of its title, topic, or id. Default limit is 15 (max 50). Reads from in-memory state — calling this is cheap.",
+    ].join(" "),
+    // eslint-disable-next-line require-await -- Mastra createTool's execute must return a Promise even when the underlying read is synchronous
     execute: async (args) => {
-      const limit = Math.min(
-        Math.max(1, args.limit ?? DEFAULT_LIST_LIMIT),
-        MAX_LIST_LIMIT
-      );
-      const { joined_rooms } = await client.getJoinedRooms();
-      return listConversationsPayload(client, joined_rooms, limit, args.query);
+      const limit = clampLimit(args.limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
+      const allRooms = client.listJoinedRooms();
+      const q = args.query?.trim().toLowerCase();
+      const filtered =
+        q !== undefined && q !== ""
+          ? allRooms.filter((room) => roomMatchesQuery(room, q))
+          : allRooms;
+      const sorted = sortByRecentTimestamp(filtered);
+      return {
+        conversations: sorted.slice(0, limit).map(toConversationSummary),
+        total: allRooms.length,
+      };
     },
     id: "list_conversations",
     inputSchema: z.object({
       limit: z
         .number()
+        .int()
+        .min(1)
+        .max(MAX_LIST_LIMIT)
         .optional()
         .describe(
-          `Maximum conversations to return (default ${DEFAULT_LIST_LIMIT}, max ${MAX_LIST_LIMIT})`
+          `max conversations to return (default ${DEFAULT_LIST_LIMIT})`
         ),
       query: z
         .string()
         .optional()
         .describe(
-          "Filter by substring match on name, topic, or conversation_id (case-insensitive)"
+          "case-insensitive substring filter on title, topic, or conversation_id"
         ),
     }),
     mcp: {
@@ -324,52 +120,55 @@ export const createConversationTools = (client: MatrixClient) => ({
     },
     outputSchema: z.object({
       conversations: z.array(conversationSummarySchema),
-      total_joined: z.number(),
+      total: z
+        .number()
+        .describe(
+          "total number of joined conversations (before applying query/limit)"
+        ),
     }),
   }),
 
   read_conversation: createTool({
-    description:
-      "Read recent messages from a conversation as a single transcript string (oldest to newest in this page). Use next_batch with from to load older messages. Set include_event_ids when you need to reply to a specific message (send_message.reply_to_event_id).",
+    description: [
+      "Reads recent messages from a conversation as a single oldest-first transcript string.",
+      "Each line has the form `<iso-timestamp> <sender-localpart> [<message_id>]: <text>` — pass that `message_id` as `reply_to_message_id` in `send_message` to reply to that specific message.",
+      "To page back further into history, call again with `cursor` set to the previous response's `next_cursor`. Default limit is 20 (max 50).",
+    ].join(" "),
     execute: async (args) => {
-      const limit = Math.min(
-        Math.max(1, args.limit ?? DEFAULT_READ_LIMIT),
-        MAX_READ_LIMIT
-      );
-      const out = await buildReadConversationPayload(
-        client,
-        args.conversation_id,
-        {
-          from: args.from,
-          include_event_ids: args.include_event_ids,
-          limit,
-        }
-      );
-      return out;
+      const limit = clampLimit(args.limit, DEFAULT_READ_LIMIT, MAX_READ_LIMIT);
+      const page = await client.readMessages(args.conversation_id, {
+        from: args.cursor,
+        limit,
+      });
+      const chronological = page.events.toReversed();
+      const lines = chronological.map(transcriptLine);
+      return {
+        conversation_id: args.conversation_id,
+        message_count: lines.length,
+        next_cursor: page.next_batch,
+        transcript: lines.join("\n"),
+      };
     },
     id: "read_conversation",
     inputSchema: z.object({
       conversation_id: z
         .string()
-        .describe("Matrix room id (!room:server) for this chat"),
-      from: z
+        .describe(
+          "conversation_id from list_conversations (Matrix room id, e.g. !abc:example.com)"
+        ),
+      cursor: z
         .string()
         .optional()
         .describe(
-          "Pagination token from a previous read_conversation response"
-        ),
-      include_event_ids: z
-        .boolean()
-        .optional()
-        .describe(
-          "Include Matrix event_id on each line for threading replies via send_message"
+          "pagination token returned as `next_cursor` from a previous call; omit for the latest page"
         ),
       limit: z
         .number()
+        .int()
+        .min(1)
+        .max(MAX_READ_LIMIT)
         .optional()
-        .describe(
-          `Max messages to fetch (default ${DEFAULT_READ_LIMIT}, max ${MAX_READ_LIMIT})`
-        ),
+        .describe(`max messages to fetch (default ${DEFAULT_READ_LIMIT})`),
     }),
     mcp: {
       annotations: {
@@ -380,35 +179,45 @@ export const createConversationTools = (client: MatrixClient) => ({
     outputSchema: z.object({
       conversation_id: z.string(),
       message_count: z.number(),
-      next_batch: z.string().optional(),
+      next_cursor: z
+        .string()
+        .optional()
+        .describe(
+          "pass back as `cursor` to fetch the next (older) page; absent when at the start of history"
+        ),
       transcript: z.string(),
     }),
   }),
 
   send_message: createTool({
-    description:
-      "Send a text message to a conversation (conversation_id = Matrix room id). Optional reply_to_event_id creates a threaded reply to that message.",
+    description: [
+      "Sends a plain-text message to a conversation.",
+      "To reply to a specific message, set `reply_to_message_id` to its id (visible inside `[...]` in `read_conversation` transcripts). Returns the new message's `message_id`.",
+    ].join(" "),
     execute: async (args) => {
       const result =
-        args.reply_to_event_id !== undefined && args.reply_to_event_id !== ""
-          ? await client.replyToMessage(
+        args.reply_to_message_id !== undefined &&
+        args.reply_to_message_id !== ""
+          ? await client.sendReply(
               args.conversation_id,
-              args.reply_to_event_id,
+              args.reply_to_message_id,
               args.body
             )
-          : await client.sendMessage(args.conversation_id, args.body);
-      return { event_id: result.event_id, sent: true as const };
+          : await client.sendText(args.conversation_id, args.body);
+      return { message_id: result.event_id };
     },
     id: "send_message",
     inputSchema: z.object({
-      body: z.string().describe("Plain-text message to send"),
+      body: z.string().min(1).describe("plain-text message body"),
       conversation_id: z
         .string()
-        .describe("Matrix room id of the conversation"),
-      reply_to_event_id: z
+        .describe("conversation_id from list_conversations"),
+      reply_to_message_id: z
         .string()
         .optional()
-        .describe("If set, reply in-thread to this message event id"),
+        .describe(
+          "message_id to reply to (from a `[<message_id>]` tag in a read_conversation transcript)"
+        ),
     }),
     mcp: {
       annotations: {
@@ -417,8 +226,7 @@ export const createConversationTools = (client: MatrixClient) => ({
       },
     },
     outputSchema: z.object({
-      event_id: z.string(),
-      sent: z.literal(true),
+      message_id: z.string(),
     }),
   }),
 });

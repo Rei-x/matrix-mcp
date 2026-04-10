@@ -1,0 +1,30 @@
+/**
+ * Common types for matrix-mcp eval fixtures.
+ *
+ * A `Fixture` is a frozen, deterministic snapshot of one user's Matrix world.
+ * Multiple fixtures can coexist (e.g. work vs personal) and each suite picks
+ * which one its qa_pairs run against.
+ */
+
+export interface FixtureMessage {
+  body: string;
+  event_id: string;
+  origin_server_ts: number;
+  sender: string;
+}
+
+export interface FixtureRoom {
+  /** chronological (oldest → newest); the fixture client serves them backwards */
+  messages: FixtureMessage[];
+  name: string;
+  room_id: string;
+  topic: string | null;
+}
+
+export interface Fixture {
+  rooms: FixtureRoom[];
+  /** mxid of the syncing user this fixture represents */
+  user_id: string;
+}
+
+export const tsOf = (iso: string): number => new Date(iso).getTime();

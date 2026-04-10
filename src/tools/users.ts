@@ -1,16 +1,14 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
-import type { MatrixClient } from "@/matrix/client";
+import type { MatrixToolClient } from "@/matrix/client";
 
-export const createUserTools = (client: MatrixClient) => ({
+export const createUserTools = (client: MatrixToolClient) => ({
   whoami: createTool({
     description:
-      "Return the authenticated Matrix user id. Use it to tell your own messages apart in transcripts.",
-    execute: async () => {
-      const result = await client.whoAmI();
-      return { user_id: result.user_id };
-    },
+      "Returns your own Matrix user id (e.g. `@alice:example.com`). Use it to recognise which lines in `read_conversation` transcripts you sent yourself.",
+    // eslint-disable-next-line require-await -- Mastra createTool's execute must return a Promise even when the underlying read is synchronous
+    execute: async () => ({ user_id: client.whoAmI().user_id }),
     id: "whoami",
     inputSchema: z.object({}),
     mcp: {

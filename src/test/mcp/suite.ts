@@ -1,9 +1,11 @@
+import { Preset } from "matrix-js-sdk";
 import { expect } from "vitest";
 import { z } from "zod";
 
 import { createApp } from "@/app";
 import type { AppEnv } from "@/env";
 import { MatrixClient } from "@/matrix/client";
+import type { createAllTools } from "@/tools";
 
 export const assertPresent = <T>(value: T | undefined, message: string): T => {
   if (value === undefined) {
@@ -42,7 +44,43 @@ export const mcpJsonRpcSchema = z.object({
   jsonrpc: z.string(),
 });
 
-const parseToolPayload = (envelope: z.infer<typeof toolCallResultSchema>) => {
+type ToolMap = ReturnType<typeof createAllTools>;
+export type ToolName = Extract<keyof ToolMap, string>;
+
+type SchemaInputType<S> = S extends {
+  readonly "~standard": {
+    readonly types?: { readonly input: infer I } | undefined;
+  };
+}
+  ? I
+  : never;
+type SchemaOutputType<S> = S extends {
+  readonly "~standard": {
+    readonly types?: { readonly output: infer O } | undefined;
+  };
+}
+  ? O
+  : never;
+
+export type ToolInput<N extends ToolName> = ToolMap[N] extends {
+  inputSchema?: infer S;
+}
+  ? SchemaInputType<NonNullable<S>>
+  : never;
+export type ToolOutput<N extends ToolName> = ToolMap[N] extends {
+  outputSchema?: infer S;
+}
+  ? SchemaOutputType<NonNullable<S>>
+  : never;
+
+type CallToolArgs<N extends ToolName> =
+  Record<string, never> extends ToolInput<N>
+    ? [args?: ToolInput<N>]
+    : [args: ToolInput<N>];
+
+const parseToolPayload = <N extends ToolName>(
+  envelope: z.infer<typeof toolCallResultSchema>
+): ToolOutput<N> => {
   const blocks = z
     .array(z.object({ text: z.string() }))
     .min(1)
@@ -52,15 +90,17 @@ const parseToolPayload = (envelope: z.infer<typeof toolCallResultSchema>) => {
     throw new Error("unreachable: MCP tool content had min(1) but no element");
   }
   const firstBlock = z.object({ text: z.string() }).parse(rawFirst);
-  return z.record(z.string(), z.unknown()).parse(JSON.parse(firstBlock.text));
+  const parsed: unknown = JSON.parse(firstBlock.text);
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- the tool's outputSchema validates the shape on the server side
+  return parsed as ToolOutput<N>;
 };
 
-export const REQUIRED_TOOL_NAMES = [
+export const REQUIRED_TOOL_NAMES: readonly ToolName[] = [
   "list_conversations",
   "read_conversation",
   "send_message",
   "whoami",
-] as const;
+];
 
 export const toolSetIncludesAllRequired = (toolNames: Set<string>): boolean =>
   REQUIRED_TOOL_NAMES.every((n) => toolNames.has(n));
@@ -103,16 +143,17 @@ export interface SharedRoom {
 
 export interface McpSuite {
   app: ReturnType<typeof createApp>;
-  callTool: (
-    name: string,
-    args?: Record<string, unknown>
-  ) => Promise<Record<string, unknown>>;
-  callToolRaw: (
-    name: string,
-    args?: Record<string, unknown>
+  callTool: <N extends ToolName>(
+    name: N,
+    ...args: CallToolArgs<N>
+  ) => Promise<ToolOutput<N>>;
+  callToolRaw: <N extends ToolName>(
+    name: N,
+    ...args: CallToolArgs<N>
   ) => Promise<z.infer<typeof toolCallResultSchema>>;
   cleanupSharedRoom: () => Promise<void>;
   ensureSharedRoom: () => Promise<void>;
+  matrixClient: MatrixClient;
   mcpRequest: (
     body: Record<string, unknown>
   ) => Promise<z.infer<typeof jsonrpcResponseSchema>>;
@@ -122,31 +163,33 @@ export interface McpSuite {
 }
 
 const createDedicatedTestRoom = async (
-  bindings: AppEnv["Bindings"],
+  client: MatrixClient,
   room: SharedRoom
 ): Promise<void> => {
-  const client = new MatrixClient(
-    bindings.MATRIX_BASE_URL,
-    bindings.MATRIX_ACCESS_TOKEN
-  );
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const { room_id } = await client.createRoom({
     is_direct: false,
     name: `matrix-mcp test ${suffix}`,
-    preset: "private_chat",
+    preset: Preset.PrivateChat,
     topic:
       "matrix-mcp integration tests (automated; not a DM — safe to delete).",
   });
-  await client.sendMessage(
+  // Wait for the synced state to register the room (next /sync tick) so tools
+  // reading from the in-memory store see it on the very next call.
+  await client.waitForRoom(room_id);
+  await client.sendText(
     room_id,
-    "matrix-mcp integration test room (seed message)",
-    "m.text"
+    "matrix-mcp integration test room (seed message)"
   );
   room.id = room_id;
 };
 
 export const createMcpSuite = (testEnv: AppEnv["Bindings"]): McpSuite => {
-  const app = createApp();
+  const matrixClient = new MatrixClient(
+    testEnv.MATRIX_BASE_URL,
+    testEnv.MATRIX_ACCESS_TOKEN
+  );
+  const app = createApp(matrixClient);
   const room: SharedRoom = { id: "" };
   const mcpRequest = async (body: Record<string, unknown>) => {
     const response = await app.request(
@@ -181,57 +224,55 @@ export const createMcpSuite = (testEnv: AppEnv["Bindings"]): McpSuite => {
     expect(response.status).toBe(200);
     return response.json();
   };
-  const invokeTool = async (
-    name: string,
-    args: Record<string, unknown> = {}
-  ) => {
+  const callRawEnvelope = async <N extends ToolName>(
+    name: N,
+    args: ToolInput<N> | undefined
+  ): Promise<z.infer<typeof toolCallResultSchema>> => {
     const rpc = await mcpRequest({
       id: Math.floor(Math.random() * 10_000),
       jsonrpc: "2.0",
       method: "tools/call",
-      params: { arguments: args, name },
-    });
-    const envelope = toolCallResultSchema.parse(rpc.result);
-    return parseToolPayload(envelope);
-  };
-  const invokeToolRaw = async (
-    name: string,
-    args: Record<string, unknown> = {}
-  ) => {
-    const rpc = await mcpRequest({
-      id: Math.floor(Math.random() * 10_000),
-      jsonrpc: "2.0",
-      method: "tools/call",
-      params: { arguments: args, name },
+      params: { arguments: args ?? {}, name },
     });
     return toolCallResultSchema.parse(rpc.result);
   };
+  const invokeTool = async <N extends ToolName>(
+    name: N,
+    ...args: CallToolArgs<N>
+  ): Promise<ToolOutput<N>> => {
+    const envelope = await callRawEnvelope(name, args[0]);
+    return parseToolPayload<N>(envelope);
+  };
+  const invokeToolRaw = async <N extends ToolName>(
+    name: N,
+    ...args: CallToolArgs<N>
+  ): Promise<z.infer<typeof toolCallResultSchema>> => {
+    const result = await callRawEnvelope(name, args[0]);
+    return result;
+  };
   const ensureSharedRoom = async (): Promise<void> => {
+    await matrixClient.start();
     if (room.id !== "") {
       return;
     }
-    await createDedicatedTestRoom(testEnv, room);
+    await createDedicatedTestRoom(matrixClient, room);
   };
   const cleanupSharedRoom = async (): Promise<void> => {
     const { id } = room;
-    if (id === "") {
-      return;
+    if (id !== "") {
+      try {
+        await matrixClient.leaveRoom(id);
+      } catch {
+        /* room may already be left */
+      }
+      try {
+        await matrixClient.forgetRoom(id);
+      } catch {
+        /* forget can fail if not left or server policy */
+      }
+      room.id = "";
     }
-    const client = new MatrixClient(
-      testEnv.MATRIX_BASE_URL,
-      testEnv.MATRIX_ACCESS_TOKEN
-    );
-    try {
-      await client.leaveRoom(id);
-    } catch {
-      /* room may already be left */
-    }
-    try {
-      await client.forgetRoom(id);
-    } catch {
-      /* forget can fail if not left or server policy */
-    }
-    room.id = "";
+    matrixClient.stop();
   };
   return {
     app,
@@ -239,6 +280,7 @@ export const createMcpSuite = (testEnv: AppEnv["Bindings"]): McpSuite => {
     callToolRaw: invokeToolRaw,
     cleanupSharedRoom,
     ensureSharedRoom,
+    matrixClient,
     mcpRequest,
     mcpRequestRaw,
     room,

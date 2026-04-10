@@ -1,0 +1,592 @@
+{
+  "flags": {
+    "json": "evals/haiku-report.json",
+    "maxSteps": 20,
+    "model": "claude-haiku-4-5",
+    "suite": null,
+    "task": null,
+    "trials": 1,
+    "verbose": false
+  },
+  "pass_at_k": 32,
+  "pass_pow_k": 32,
+  "suites": [
+    {
+      "description": "Work-flavoured retrieval and synthesis: incident postmortems, release coordination, engineering standups, design-doc DMs, and a Discord bridge.",
+      "pass_at_k": 9,
+      "pass_pow_k": 9,
+      "slug": "work",
+      "tasks": [
+        {
+          "passes": 1,
+          "question": "Find the channel about the production incident that took place on 2025-09-14. Which user reported that the database replica lag was climbing? Reply with only the username (no @ sign and no domain).",
+          "slug": "incident-replica-lag-reporter",
+          "trials": [
+            {
+              "answer": "alice",
+              "correct": true,
+              "duration_ms": 4171,
+              "expected": "alice",
+              "steps": 4,
+              "stop_reason": "end_turn",
+              "tool_calls": 3
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Find the channel about the production incident that took place on 2025-09-14. According to the post-mortem message in that channel, which migration number was missing the CONCURRENTLY keyword? Reply with just the migration number, exactly as it appears in the message.",
+          "slug": "incident-postmortem-migration",
+          "trials": [
+            {
+              "answer": "0042",
+              "correct": true,
+              "duration_ms": 3341,
+              "expected": "0042",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 3
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "In the channel about the production incident from 2025-09-14, how many whole minutes elapsed between the very first PagerDuty alert and the message confirming that the rollback had completed and latency was normalising? Reply with just the integer.",
+          "slug": "incident-rollback-duration-minutes",
+          "trials": [
+            {
+              "answer": "43",
+              "correct": true,
+              "duration_ms": 5586,
+              "expected": "43",
+              "steps": 4,
+              "stop_reason": "end_turn",
+              "tool_calls": 3
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Find your direct-message conversation with the user named Alice. What URL did Alice share for the design document she asked you to review? Reply with just the URL — no surrounding text.",
+          "slug": "dm-alice-design-doc-url",
+          "trials": [
+            {
+              "answer": "https://docs.fixture.local/d/auth-redesign",
+              "correct": true,
+              "duration_ms": 2918,
+              "expected": "https://docs.fixture.local/d/auth-redesign",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Find the conversation where the v2.3.0 release was coordinated. Which user posted the message announcing that the release branch had been cut and asking the team to freeze main? Reply with only the username (no @ sign and no domain).",
+          "slug": "release-branch-cut-author",
+          "trials": [
+            {
+              "answer": "bob",
+              "correct": true,
+              "duration_ms": 3644,
+              "expected": "bob",
+              "steps": 4,
+              "stop_reason": "end_turn",
+              "tool_calls": 3
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Find the conversation where the v2.3.0 release was coordinated. On what date was v2.3.0 actually deployed to production (not staging)? Reply in YYYY-MM-DD format.",
+          "slug": "release-prod-deploy-date",
+          "trials": [
+            {
+              "answer": "2025-09-23",
+              "correct": true,
+              "duration_ms": 4034,
+              "expected": "2025-09-23",
+              "steps": 4,
+              "stop_reason": "end_turn",
+              "tool_calls": 3
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Find the engineering team's standup channel. A ticket id was mentioned in connection with a flaky test. What is the exact ticket id? Reply with just the ticket id, in the same format and case it appears in the message.",
+          "slug": "engineering-flake-ticket-id",
+          "trials": [
+            {
+              "answer": "FLAKE-12",
+              "correct": true,
+              "duration_ms": 6036,
+              "expected": "FLAKE-12",
+              "steps": 5,
+              "stop_reason": "end_turn",
+              "tool_calls": 4
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Find your direct-message conversation with Alice. After Alice shared the design document, you left a comment about the token TTL. On which slide of the document did you leave that comment? Reply with just the slide number as an integer.",
+          "slug": "dm-alice-token-ttl-slide",
+          "trials": [
+            {
+              "answer": "4",
+              "correct": true,
+              "duration_ms": 3574,
+              "expected": "4",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 3
+            }
+          ]
+        },
+        {
+          "passes": 0,
+          "question": "Find the conversation that bridges messages from Discord. Which sender posted the heads-up about the upcoming Discord server upgrade? Reply with only the username (no @ sign and no domain).",
+          "slug": "discord-bridge-upgrade-sender",
+          "trials": [
+            {
+              "answer": "moderator",
+              "correct": false,
+              "duration_ms": 4991,
+              "expected": "discordbot",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Across all of your joined conversations, in how many distinct conversations does at least one message appear from the user whose username localpart is 'bob'? Reply with just the integer.",
+          "slug": "bob-conversation-count",
+          "trials": [
+            {
+              "answer": "3",
+              "correct": true,
+              "duration_ms": 6012,
+              "expected": "3",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 6
+            }
+          ]
+        }
+      ],
+      "total_pass": 9,
+      "total_trials": 10
+    },
+    {
+      "description": "Personal-life retrieval and synthesis: DMs with mom/best-friend/partner, group plans (vacation, family, book club), and a WhatsApp bridge.",
+      "pass_at_k": 11,
+      "pass_pow_k": 11,
+      "slug": "personal",
+      "tasks": [
+        {
+          "passes": 1,
+          "question": "Among all of your joined conversations, which conversation contains the single most recent message of any kind? Reply with just the conversation's title, exactly as it appears in `list_conversations`.",
+          "slug": "most-recent-conversation",
+          "trials": [
+            {
+              "answer": "Mom",
+              "correct": true,
+              "duration_ms": 2184,
+              "expected": "Mom",
+              "steps": 2,
+              "stop_reason": "end_turn",
+              "tool_calls": 1
+            }
+          ]
+        },
+        {
+          "passes": 0,
+          "question": "In your direct-message conversation with Mom, you tell her you booked Lisa's dentist appointment. On what date did you book the appointment? Reply in YYYY-MM-DD format.",
+          "slug": "dm-mom-dentist-date",
+          "trials": [
+            {
+              "answer": "2025-09-23",
+              "correct": false,
+              "duration_ms": 5688,
+              "expected": "2025-10-03",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "In your direct-message conversation with Sam, Sam suggested a time to meet at Brooklyn Boulders. What time did Sam say? Reply with just the time, exactly as Sam wrote it.",
+          "slug": "dm-sam-climbing-time",
+          "trials": [
+            {
+              "answer": "6:30",
+              "correct": true,
+              "duration_ms": 3201,
+              "expected": "6:30",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "In your direct-message conversation with Jamie, Jamie made a reservation for your anniversary. At which restaurant? Reply with just the restaurant name.",
+          "slug": "dm-jamie-anniversary-restaurant",
+          "trials": [
+            {
+              "answer": "Rosella",
+              "correct": true,
+              "duration_ms": 4140,
+              "expected": "Rosella",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Find the conversation that is planning a trip to Lisbon. What is the URL of the airbnb that someone shared in that chat? Reply with just the URL — no surrounding text or quotes.",
+          "slug": "lisbon-airbnb-url",
+          "trials": [
+            {
+              "answer": "https://airbnb.com/rooms/lisbon-alfama-loft",
+              "correct": true,
+              "duration_ms": 3771,
+              "expected": "https://airbnb.com/rooms/lisbon-alfama-loft",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "In the conversation planning the trip to Lisbon, on what date does the booked accommodation check in? Reply in YYYY-MM-DD format.",
+          "slug": "lisbon-checkin-date",
+          "trials": [
+            {
+              "answer": "2026-03-14",
+              "correct": true,
+              "duration_ms": 3134,
+              "expected": "2026-03-14",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Find your book club conversation. What is the title of the book chosen for October? Reply with just the book title, exactly as written in the message (no author, no quote marks).",
+          "slug": "book-club-october-title",
+          "trials": [
+            {
+              "answer": "The Overstory",
+              "correct": true,
+              "duration_ms": 3258,
+              "expected": "The Overstory",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "In your family group chat, on what date is grandma's birthday this year? Reply in YYYY-MM-DD format. (Assume the current year is 2025 and the upcoming birthday has not happened yet.)",
+          "slug": "family-grandma-birthday",
+          "trials": [
+            {
+              "answer": "2025-10-05",
+              "correct": true,
+              "duration_ms": 5744,
+              "expected": "2025-10-05",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Across all of your joined conversations, in how many distinct conversations has the user with localpart 'maria' (i.e. @maria:fixture.local) sent at least one message? Reply with just the integer.",
+          "slug": "maria-conversation-count",
+          "trials": [
+            {
+              "answer": "2",
+              "correct": true,
+              "duration_ms": 9457,
+              "expected": "2",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 8
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Across all of your joined conversations, in which conversation did someone share a Spotify playlist link? Reply with just the conversation's title, exactly as it appears in `list_conversations`.",
+          "slug": "spotify-link-conversation",
+          "trials": [
+            {
+              "answer": "Sam",
+              "correct": true,
+              "duration_ms": 12583,
+              "expected": "Sam",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 8
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Across all of your joined conversations, in which conversation does someone ask whether anyone is going to a wedding in October? Reply with just the conversation's title, exactly as it appears in `list_conversations`.",
+          "slug": "wedding-question-conversation",
+          "trials": [
+            {
+              "answer": "Old Friends (WA)",
+              "correct": true,
+              "duration_ms": 8580,
+              "expected": "Old Friends (WA)",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 8
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "In your direct-message conversation with Mom, you sent a message thanking her for the cake from your birthday. On what date did you send that thank-you message? Reply in YYYY-MM-DD format.",
+          "slug": "dm-mom-cake-thanks-date",
+          "trials": [
+            {
+              "answer": "2025-09-29",
+              "correct": true,
+              "duration_ms": 11625,
+              "expected": "2025-09-29",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        }
+      ],
+      "total_pass": 11,
+      "total_trials": 12
+    },
+    {
+      "description": "LinkedIn-on-Matrix workload: replying to recruiters, fulfilling CV requests, comparing offers across cold-reach DMs, and triaging spam vs real opportunities.",
+      "pass_at_k": 12,
+      "pass_pow_k": 12,
+      "slug": "linkedin",
+      "tasks": [
+        {
+          "passes": 1,
+          "question": "Across all of your LinkedIn conversations that mention a base salary in US dollars, which recruiter offered the highest base salary number? Reply with the recruiter's full name (first and last), exactly as it appears in their message.",
+          "slug": "highest-base-salary-recruiter",
+          "trials": [
+            {
+              "answer": "Priya Patel",
+              "correct": true,
+              "duration_ms": 13350,
+              "expected": "Priya Patel",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 8
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Across all of your LinkedIn conversations, what is the highest base salary number explicitly stated in any single message? Reply with just that number including any currency symbol or letter, exactly as it appears in the message (e.g. '$120k', '€110k').",
+          "slug": "highest-base-salary-amount",
+          "trials": [
+            {
+              "answer": "$250k",
+              "correct": true,
+              "duration_ms": 5745,
+              "expected": "$250k",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 8
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Across all of your LinkedIn conversations, in how many distinct conversations does the other person explicitly ask you to send your CV or resume? Reply with just the integer.",
+          "slug": "cv-request-count",
+          "trials": [
+            {
+              "answer": "3",
+              "correct": true,
+              "duration_ms": 7636,
+              "expected": "3",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 9
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "In which company is a recruiter on LinkedIn pitching a Staff Engineer position? Reply with just the company name.",
+          "slug": "staff-engineer-company",
+          "trials": [
+            {
+              "answer": "Stripe",
+              "correct": true,
+              "duration_ms": 12366,
+              "expected": "Stripe",
+              "steps": 4,
+              "stop_reason": "end_turn",
+              "tool_calls": 8
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Find the LinkedIn conversation about a Senior Backend Engineer role on a Payments team. What is the high end of the base salary range mentioned for that role? Reply with just the number including the currency symbol, exactly as it appears in the message.",
+          "slug": "senior-backend-payments-base-high",
+          "trials": [
+            {
+              "answer": "$220k",
+              "correct": true,
+              "duration_ms": 15734,
+              "expected": "$220k",
+              "steps": 5,
+              "stop_reason": "end_turn",
+              "tool_calls": 7
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "On LinkedIn, a startup founder reached out to you about a CTO / founding engineer role. What is the equity percentage range mentioned in their message? Reply exactly as it appears (e.g. '1-3%').",
+          "slug": "founder-equity-range",
+          "trials": [
+            {
+              "answer": "1-3%",
+              "correct": true,
+              "duration_ms": 7942,
+              "expected": "1-3%",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 6
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Across all of your LinkedIn conversations, in how many conversations have you (Rei) never sent a single reply — i.e. every message in the conversation is from the other person and none from you? Reply with just the integer.",
+          "slug": "never-replied-count",
+          "trials": [
+            {
+              "answer": "3",
+              "correct": true,
+              "duration_ms": 8462,
+              "expected": "3",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 9
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "Find the LinkedIn conversation where you politely declined the role specifically because it was about payments. Which company was the recruiter recruiting for? Reply with just the company name.",
+          "slug": "declined-payments-company",
+          "trials": [
+            {
+              "answer": "Klarna",
+              "correct": true,
+              "duration_ms": 14651,
+              "expected": "Klarna",
+              "steps": 4,
+              "stop_reason": "end_turn",
+              "tool_calls": 9
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "One of your LinkedIn conversations is from someone who is NOT a recruiter pitching a job — they're an old contact reaching out to catch up and asking to introduce you to a friend. What is that person's full name (first and last)?",
+          "slug": "non-recruiter-contact-name",
+          "trials": [
+            {
+              "answer": "Tom Wilson",
+              "correct": true,
+              "duration_ms": 8553,
+              "expected": "Tom Wilson",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 8
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "In one of your LinkedIn conversations, the other person asks if they can introduce you to a friend who is starting a search for a senior engineering role. What is the first name of the friend they want to introduce you to?",
+          "slug": "intro-friend-first-name",
+          "trials": [
+            {
+              "answer": "Marcia",
+              "correct": true,
+              "duration_ms": 8543,
+              "expected": "Marcia",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 8
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "One of your LinkedIn conversations is generic recruiter spam — no specific company, no specific role, and no compensation details, just a vague 'are you interested in opportunities' message. What is the title of that conversation, exactly as it appears in `list_conversations`?",
+          "slug": "spam-conversation-title",
+          "trials": [
+            {
+              "answer": "Recruiter (LinkedIn)",
+              "correct": true,
+              "duration_ms": 11581,
+              "expected": "Recruiter (LinkedIn)",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        },
+        {
+          "passes": 1,
+          "question": "In your LinkedIn conversation with Sarah Chen, what specific time slot did Sarah ultimately confirm for the intro call? Reply exactly as Sarah wrote it (e.g. 'Wednesday at 4:30pm').",
+          "slug": "sarah-confirmed-call-time",
+          "trials": [
+            {
+              "answer": "Wednesday at 4:30pm",
+              "correct": true,
+              "duration_ms": 5467,
+              "expected": "Wednesday at 4:30pm",
+              "steps": 3,
+              "stop_reason": "end_turn",
+              "tool_calls": 2
+            }
+          ]
+        }
+      ],
+      "total_pass": 12,
+      "total_trials": 12
+    }
+  ],
+  "total_pass": 32,
+  "total_tasks": 34,
+  "total_trials": 34
+}
