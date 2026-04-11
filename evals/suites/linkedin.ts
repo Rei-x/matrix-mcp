@@ -25,9 +25,9 @@ export const LINKEDIN_SUITE: EvalSuite = {
   questions: [
     // ── Compensation comparison ───────────────────────────────────────
     {
-      answer: "Priya Patel",
+      answer: "Priya Patel (LinkedIn)",
       question:
-        "Across all of your LinkedIn conversations that mention a base salary in US dollars, which recruiter offered the highest base salary number? Reply with the recruiter's full name (first and last), exactly as it appears in their message.",
+        "Across all of your LinkedIn conversations that mention a base salary in US dollars, which recruiter offered the highest base salary number? Reply with the title of that recruiter's conversation EXACTLY as it appears in `list_conversations` (e.g. 'Sarah Chen (LinkedIn)') — do not abbreviate, do not strip the suffix, do not return just a first name.",
       slug: "highest-base-salary-recruiter",
     },
     {
@@ -41,7 +41,7 @@ export const LINKEDIN_SUITE: EvalSuite = {
     {
       answer: "3",
       question:
-        "Across all of your LinkedIn conversations, in how many distinct conversations does the other person explicitly ask you to send your CV or resume? Reply with just the integer.",
+        "Across all of your LinkedIn conversations, in how many distinct conversations does the other person explicitly ask you to send your CV / resume? Important: people use both words interchangeably — search for BOTH 'CV' AND 'resume' (and any variant like 'résumé') and count the total number of DISTINCT conversations that contain at least one such request from the other person. Reply with just the integer.",
       slug: "cv-request-count",
     },
 

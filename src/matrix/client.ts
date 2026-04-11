@@ -31,6 +31,24 @@ export interface SendEventResponse {
   event_id: string;
 }
 
+export interface MessageMatch {
+  body: string;
+  conversation_id: string;
+  conversation_title: string | null;
+  message_id: string;
+  origin_server_ts: number;
+  sender: string;
+}
+
+export interface MessageSearchResult {
+  /** matches across rooms, oldest-first within each room, then ordered by room recency */
+  matches: MessageMatch[];
+  /** total number of matches found before applying `limit` */
+  total: number;
+  /** if true, the search exhausted in-memory state and there may be older messages on the homeserver */
+  truncated: boolean;
+}
+
 export interface CreateRoomOptions {
   invite?: string[];
   is_direct?: boolean;
@@ -50,6 +68,10 @@ export interface MatrixToolClient {
     roomId: string,
     options?: { from?: string; limit?: number }
   ): Promise<MessagePage>;
+  searchMessages(
+    query: string,
+    options?: { conversation_id?: string; limit?: number }
+  ): MessageSearchResult;
   sendText(roomId: string, body: string): Promise<SendEventResponse>;
   sendReply(
     roomId: string,
@@ -95,6 +117,19 @@ const roomNameOf = (room: sdk.Room): string | null => {
 const roomLastTsOf = (room: sdk.Room): number | null => {
   const ts = room.getLastActiveTimestamp();
   return typeof ts === "number" && ts > 0 ? ts : null;
+};
+
+const messageBodyOf = (ev: sdk.MatrixEvent): string | null => {
+  // matrix-js-sdk's getContent() returns `any`; narrow safely via unknown
+  const content: unknown = ev.getContent();
+  if (content === null || typeof content !== "object") {
+    return null;
+  }
+  if (!("body" in content)) {
+    return null;
+  }
+  const { body } = content;
+  return typeof body === "string" && body !== "" ? body : null;
 };
 
 const summarizeRoom = (room: sdk.Room): RoomSummary => ({
@@ -269,6 +304,70 @@ export class MatrixClient implements MatrixToolClient {
       events,
       ...(typeof result.end === "string" ? { next_batch: result.end } : {}),
     };
+  }
+
+  /**
+   * Case-insensitive substring search across the message bodies of every
+   * joined room (or one specific room if `conversation_id` is set), reading
+   * from the in-memory synced live timeline. No HTTP calls.
+   *
+   * Because matrix-js-sdk only keeps a bounded live timeline per room (the
+   * default `initialSyncLimit` is 20 events), this can miss older messages
+   * that the server has but the client hasn't paged in yet. The result's
+   * `truncated` flag is true if any room hit its in-memory limit.
+   */
+  searchMessages(
+    query: string,
+    options: { conversation_id?: string; limit?: number } = {}
+  ): MessageSearchResult {
+    const limit = options.limit ?? 20;
+    const needle = query.toLowerCase();
+    if (needle === "") {
+      return { matches: [], total: 0, truncated: false };
+    }
+    const rooms =
+      options.conversation_id === undefined
+        ? this.sdkClient.getRooms().filter(isJoined)
+        : [this.sdkClient.getRoom(options.conversation_id)].filter(
+            (r): r is sdk.Room => r !== null && isJoined(r)
+          );
+    // Sort rooms by recency so the most relevant matches come first.
+    rooms.sort((a, b) => (roomLastTsOf(b) ?? 0) - (roomLastTsOf(a) ?? 0));
+    const matches: MessageMatch[] = [];
+    let truncated = false;
+    let total = 0;
+    for (const room of rooms) {
+      const events = room.getLiveTimeline().getEvents();
+      // The live timeline isn't guaranteed to hold the full room history.
+      if (events.length >= 1000) {
+        truncated = true;
+      }
+      const title = roomNameOf(room);
+      for (const ev of events) {
+        if (ev.getType() !== "m.room.message") {
+          continue;
+        }
+        const body = messageBodyOf(ev);
+        if (body === null) {
+          continue;
+        }
+        if (!body.toLowerCase().includes(needle)) {
+          continue;
+        }
+        total += 1;
+        if (matches.length < limit) {
+          matches.push({
+            body,
+            conversation_id: room.roomId,
+            conversation_title: title,
+            message_id: ev.getId() ?? "",
+            origin_server_ts: ev.getTs(),
+            sender: ev.getSender() ?? "",
+          });
+        }
+      }
+    }
+    return { matches, total, truncated };
   }
 
   async sendText(roomId: string, body: string): Promise<SendEventResponse> {

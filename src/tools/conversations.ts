@@ -11,6 +11,8 @@ const DEFAULT_LIST_LIMIT = 15;
 const MAX_LIST_LIMIT = 50;
 const DEFAULT_READ_LIMIT = 20;
 const MAX_READ_LIMIT = 50;
+const DEFAULT_SEARCH_LIMIT = 20;
+const MAX_SEARCH_LIMIT = 50;
 
 const conversationTitle = (name: string | null): string => {
   const trimmed = name?.trim();
@@ -77,7 +79,8 @@ export const createConversationTools = (client: MatrixToolClient) => ({
     description: [
       "Lists your Matrix chats (1:1 DMs, group rooms, and bridge bots), most recently active first.",
       "Each entry has a `conversation_id` (pass to `read_conversation` or `send_message`), a human `title`, and `last_activity` (ISO timestamp or null if the room has no messages).",
-      "Use `query` to find a chat by case-insensitive substring of its title, topic, or id. Default limit is 15 (max 50). Reads from in-memory state — calling this is cheap.",
+      "`query` filters by case-insensitive substring of the chat's TITLE, TOPIC, or id ONLY — it does NOT search inside message bodies. To find a chat by something a person *said*, use `search_messages` instead.",
+      "Default limit is 15 (max 50). Reads from in-memory state — calling this is cheap.",
     ].join(" "),
     // eslint-disable-next-line require-await -- Mastra createTool's execute must return a Promise even when the underlying read is synchronous
     execute: async (args) => {
@@ -132,7 +135,7 @@ export const createConversationTools = (client: MatrixToolClient) => ({
     description: [
       "Reads recent messages from a conversation as a single oldest-first transcript string.",
       "Each line has the form `<iso-timestamp> <sender-localpart> [<message_id>]: <text>` — pass that `message_id` as `reply_to_message_id` in `send_message` to reply to that specific message.",
-      "To page back further into history, call again with `cursor` set to the previous response's `next_cursor`. Default limit is 20 (max 50).",
+      "To page back further into history, call again with `cursor` set to the previous response's `next_cursor`. Default limit is 20 (max 50). If you're trying to *find* a message by content rather than browse, use `search_messages` first — it's cheaper.",
     ].join(" "),
     execute: async (args) => {
       const limit = clampLimit(args.limit, DEFAULT_READ_LIMIT, MAX_READ_LIMIT);
@@ -186,6 +189,92 @@ export const createConversationTools = (client: MatrixToolClient) => ({
           "pass back as `cursor` to fetch the next (older) page; absent when at the start of history"
         ),
       transcript: z.string(),
+    }),
+  }),
+
+  search_messages: createTool({
+    description: [
+      "Search the bodies of recent messages across your joined conversations for a case-insensitive substring.",
+      "Use this BEFORE `read_conversation` whenever you want to find a chat by something a person *said* (e.g. 'spotify link', 'CONCURRENTLY', 'Brooklyn Boulders', a URL, a ticket id) — it's far cheaper than reading every conversation one by one.",
+      "Each match returns its `conversation_id` (use with `read_conversation` or `send_message`), the `conversation_title`, the `message_id`, sender, ISO timestamp, and the matching body.",
+      "Scope to one conversation by passing `conversation_id`. Note: search reads from the in-memory synced state, so very old messages that were never paged in may be missed; the `truncated` flag indicates this.",
+    ].join(" "),
+    // eslint-disable-next-line require-await -- Mastra createTool's execute must return a Promise even when the underlying read is synchronous
+    execute: async (args) => {
+      const limit = clampLimit(
+        args.limit,
+        DEFAULT_SEARCH_LIMIT,
+        MAX_SEARCH_LIMIT
+      );
+      const result = client.searchMessages(args.query, {
+        conversation_id: args.conversation_id,
+        limit,
+      });
+      const matches = result.matches.map((m) => ({
+        body: m.body,
+        conversation_id: m.conversation_id,
+        conversation_title: m.conversation_title ?? "Unnamed chat",
+        message_id: m.message_id,
+        sender: senderLocalpart(m.sender),
+        timestamp: new Date(m.origin_server_ts).toISOString(),
+      }));
+      return {
+        matches,
+        total: result.total,
+        truncated: result.truncated,
+      };
+    },
+    id: "search_messages",
+    inputSchema: z.object({
+      conversation_id: z
+        .string()
+        .optional()
+        .describe(
+          "optional: scope the search to a single conversation (Matrix room id from `list_conversations`)"
+        ),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_SEARCH_LIMIT)
+        .optional()
+        .describe(
+          `max matches to return (default ${DEFAULT_SEARCH_LIMIT}, max ${MAX_SEARCH_LIMIT})`
+        ),
+      query: z
+        .string()
+        .min(1)
+        .describe(
+          "case-insensitive substring to find anywhere in a message body (e.g. a name, URL, error code, keyword)"
+        ),
+    }),
+    mcp: {
+      annotations: {
+        idempotentHint: true,
+        readOnlyHint: true,
+      },
+    },
+    outputSchema: z.object({
+      matches: z.array(
+        z.object({
+          body: z.string(),
+          conversation_id: z.string(),
+          conversation_title: z.string(),
+          message_id: z.string(),
+          sender: z.string(),
+          timestamp: z.string(),
+        })
+      ),
+      total: z
+        .number()
+        .describe(
+          "total number of matches found in the synced state (may exceed `matches.length` if `limit` truncated the result)"
+        ),
+      truncated: z
+        .boolean()
+        .describe(
+          "true if a room hit its in-memory message limit; older messages on the server may have been missed"
+        ),
     }),
   }),
 

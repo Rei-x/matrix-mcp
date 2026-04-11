@@ -31,13 +31,23 @@ import { tsOf as ts } from "./types";
 export const LINKEDIN_USER_ID = "@rei:fixture.local";
 
 const ME = LINKEDIN_USER_ID;
-const SARAH = "@linkedin_sarah-chen:fixture.local";
-const MARCUS = "@linkedin_marcus-davies:fixture.local";
-const PRIYA = "@linkedin_priya-patel:fixture.local";
-const JAMES = "@linkedin_james-obrien:fixture.local";
-const ANNA = "@linkedin_anna-lindqvist:fixture.local";
-const TOM = "@linkedin_tom-wilson:fixture.local";
-const SPAM = "@linkedin_unknown-recruiter:fixture.local";
+// Real mautrix-linkedin puppet ids are opaque base64-ish hashes, NOT readable
+// names. The agent must identify each candidate by the ROOM TITLE (which the
+// bridge sets to the LinkedIn display name), never by the sender mxid.
+const SARAH =
+  "@linkedin__a_co_a_a_sc_p4xq_b8m_lv9k_jr2_t_y_n_h7w_uvz_qf:fixture.local";
+const MARCUS =
+  "@linkedin__a_co_a_a_md_b3kx_q9p_mz7r_w_t_v_h_n2_j8u_lcy_pe:fixture.local";
+const PRIYA =
+  "@linkedin__a_co_a_a_pp_g7yn_h2k_lq8x_v_w_b_m_r5_z9j_xch_kt:fixture.local";
+const JAMES =
+  "@linkedin__a_co_a_a_jo_t9rb_w4x_kn3y_p_h_f_l_q8_z2v_ydj_mp:fixture.local";
+const ANNA =
+  "@linkedin__a_co_a_a_al_k4mp_z8j_xw5n_b_y_v_q_h7_r3l_ufc_te:fixture.local";
+const TOM =
+  "@linkedin__a_co_a_a_tw_n7vh_b3x_kp9q_z_l_w_y_m4_r8j_dft_xc:fixture.local";
+const SPAM =
+  "@linkedin__a_co_a_a_zz_zzzz_zzz_zzzz_z_z_z_z_zz_zzz_zzz_zz:fixture.local";
 
 const BRIDGED_TOPIC = "Bridged from LinkedIn via mautrix-linkedin.";
 

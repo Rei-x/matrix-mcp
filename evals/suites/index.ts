@@ -1,3 +1,4 @@
+import { HIRING_SUITE } from "./hiring";
 import { LINKEDIN_SUITE } from "./linkedin";
 import { PERSONAL_SUITE } from "./personal";
 import type { EvalSuite } from "./types";
@@ -13,4 +14,5 @@ export const ALL_SUITES: EvalSuite[] = [
   WORK_SUITE,
   PERSONAL_SUITE,
   LINKEDIN_SUITE,
+  HIRING_SUITE,
 ];

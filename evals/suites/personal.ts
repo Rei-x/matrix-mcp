@@ -46,7 +46,7 @@ export const PERSONAL_SUITE: EvalSuite = {
     {
       answer: "6:30",
       question:
-        "In your direct-message conversation with Sam, Sam suggested a time to meet at Brooklyn Boulders. What time did Sam say? Reply with just the time, exactly as Sam wrote it.",
+        "In your direct-message conversation with Sam, Sam suggested a time to meet at Brooklyn Boulders for climbing. What is just the clock time he wrote (the digits and colon — NOT the venue, NOT 'at <place>', NOT any am/pm if Sam didn't write one)? Reply with only the clock value, e.g. '7:00'.",
       slug: "dm-sam-climbing-time",
     },
     {

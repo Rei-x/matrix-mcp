@@ -36,3 +36,6 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Claude Code
 .claude/scheduled_tasks.lock
+
+# Eval reports
+evals/*.json

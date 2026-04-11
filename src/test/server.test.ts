@@ -13,10 +13,14 @@ describe.sequential("mcp server", () => {
     await s.cleanupSharedRoom();
   });
 
+  // The first run of `prepares shared conversation` also pays for
+  // `cleanupStaleTestRooms` (parallelized but still bounded by homeserver
+  // round-trip × number of stale rooms), so give it generous headroom over
+  // the 30s vitest default.
   test("prepares shared conversation", async () => {
     await s.ensureSharedRoom();
     expect(s.room.id).toMatch(/^!/);
-  });
+  }, 120_000);
 
   /* Register nested describe blocks synchronously (must run during suite setup, not in a hook). */
   /* eslint-disable jest/require-hook -- Vitest describe registration pattern */

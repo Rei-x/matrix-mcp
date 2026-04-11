@@ -1,6 +1,8 @@
 import type {
   MatrixToolClient,
+  MessageMatch,
   MessagePage,
+  MessageSearchResult,
   RoomSummary,
   SendEventResponse,
 } from "@/matrix/client";
@@ -93,6 +95,50 @@ export class FixtureMatrixClient implements MatrixToolClient {
       events,
       ...(reachedEnd ? {} : { next_batch: encodeCursor(roomId, nextOffset) }),
     };
+  }
+
+  searchMessages(
+    query: string,
+    options: { conversation_id?: string; limit?: number } = {}
+  ): MessageSearchResult {
+    const limit = options.limit ?? 20;
+    const needle = query.toLowerCase();
+    if (needle === "") {
+      return { matches: [], total: 0, truncated: false };
+    }
+    const rooms =
+      options.conversation_id === undefined
+        ? this.fixture.rooms
+        : this.fixture.rooms.filter(
+            (r) => r.room_id === options.conversation_id
+          );
+    // Sort rooms by recency so the most relevant matches come first.
+    const sortedRooms = [...rooms].toSorted((a, b) => {
+      const aTs = a.messages.at(-1)?.origin_server_ts ?? 0;
+      const bTs = b.messages.at(-1)?.origin_server_ts ?? 0;
+      return bTs - aTs;
+    });
+    const matches: MessageMatch[] = [];
+    let total = 0;
+    for (const room of sortedRooms) {
+      for (const m of room.messages) {
+        if (!m.body.toLowerCase().includes(needle)) {
+          continue;
+        }
+        total += 1;
+        if (matches.length < limit) {
+          matches.push({
+            body: m.body,
+            conversation_id: room.room_id,
+            conversation_title: room.name,
+            message_id: m.event_id,
+            origin_server_ts: m.origin_server_ts,
+            sender: m.sender,
+          });
+        }
+      }
+    }
+    return { matches, total, truncated: false };
   }
 
   // eslint-disable-next-line require-await -- read-only fixture; refuse all writes

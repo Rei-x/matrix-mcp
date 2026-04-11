@@ -98,6 +98,7 @@ const parseToolPayload = <N extends ToolName>(
 export const REQUIRED_TOOL_NAMES: readonly ToolName[] = [
   "list_conversations",
   "read_conversation",
+  "search_messages",
   "send_message",
   "whoami",
 ];
@@ -162,6 +163,61 @@ export interface McpSuite {
   testEnv: AppEnv["Bindings"];
 }
 
+/**
+ * Integration tests create real rooms on the real homeserver and clean them
+ * up in `afterAll`. If a test crashes or gets killed, the room never gets
+ * left/forgotten and piles up as clutter in the user's real inbox (observed:
+ * ~8 `matrix-mcp test *` rooms sitting around the top of the room list).
+ *
+ * This helper walks joined rooms once per test process, finds anything whose
+ * title starts with the test prefix AND whose last activity is older than
+ * STALE_TEST_ROOM_AGE_MS (24h), and leaves + forgets it. The age threshold
+ * is the safety margin so we NEVER touch a room a currently-running parallel
+ * test process might be using.
+ */
+const TEST_ROOM_TITLE_PREFIX = "matrix-mcp test ";
+const STALE_TEST_ROOM_AGE_MS = 24 * 60 * 60 * 1000;
+
+const cleanupStaleTestRooms = async (client: MatrixClient): Promise<number> => {
+  const now = Date.now();
+  const stale = client.listJoinedRooms().filter((r) => {
+    if (r.name === null || !r.name.startsWith(TEST_ROOM_TITLE_PREFIX)) {
+      return false;
+    }
+    if (r.last_message_ts === null) {
+      // no timestamp → can't age-check safely → skip
+      return false;
+    }
+    return now - r.last_message_ts > STALE_TEST_ROOM_AGE_MS;
+  });
+  // Per-room: leave must complete before forget. Across rooms: independent,
+  // so fan out with Promise.all — sequential cleanup of N stale rooms blew
+  // the test setup timeout when N got large.
+  const results = await Promise.all(
+    stale.map(async (r): Promise<number> => {
+      try {
+        await client.leaveRoom(r.room_id);
+      } catch {
+        /* may already be left */
+      }
+      try {
+        await client.forgetRoom(r.room_id);
+        return 1;
+      } catch {
+        /* forget can fail on server policy; swallow to never block tests */
+        return 0;
+      }
+    })
+  );
+  const cleaned = results.reduce((a, b) => a + b, 0);
+  if (cleaned > 0) {
+    console.log(
+      `[matrix-mcp test cleanup] leaving+forgetting ${cleaned} stale test room(s) (prefix="${TEST_ROOM_TITLE_PREFIX}", age > 24h)`
+    );
+  }
+  return cleaned;
+};
+
 const createDedicatedTestRoom = async (
   client: MatrixClient,
   room: SharedRoom
@@ -191,6 +247,9 @@ export const createMcpSuite = (testEnv: AppEnv["Bindings"]): McpSuite => {
   );
   const app = createApp(matrixClient);
   const room: SharedRoom = { id: "" };
+  // Guards `cleanupStaleTestRooms` to run exactly once per suite lifecycle,
+  // right after the first `ensureSharedRoom` call.
+  let staleCleanupRun = false;
   const mcpRequest = async (body: Record<string, unknown>) => {
     const response = await app.request(
       "/mcp",
@@ -252,6 +311,10 @@ export const createMcpSuite = (testEnv: AppEnv["Bindings"]): McpSuite => {
   };
   const ensureSharedRoom = async (): Promise<void> => {
     await matrixClient.start();
+    if (!staleCleanupRun) {
+      staleCleanupRun = true;
+      await cleanupStaleTestRooms(matrixClient);
+    }
     if (room.id !== "") {
       return;
     }

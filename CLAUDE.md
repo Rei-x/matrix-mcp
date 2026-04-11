@@ -34,13 +34,15 @@ evals/
     work.ts          WORK_FIXTURE — work-flavoured rooms (incident, release, eng standup, design-doc DM, discord bridge)
     personal.ts      PERSONAL_FIXTURE — DMs (mom/sam/jamie), group plans (lisbon trip, family, book club), whatsapp bridge
     linkedin.ts      LINKEDIN_FIXTURE — recruiter DMs bridged from LinkedIn (mautrix-linkedin puppet style)
+    hiring.ts        HIRING_FIXTURE — bilingual PL/EN candidate inbox modelled directly on real observed patterns (opaque puppet ids, broken bridge bot, test residue)
     client.ts        FixtureMatrixClient(fixture) implements MatrixToolClient (refuses writes)
   suites/
     types.ts         EvalSuite + QaPair types
     work.ts          WORK_SUITE — 10 qa_pairs against WORK_FIXTURE
     personal.ts      PERSONAL_SUITE — 12 qa_pairs against PERSONAL_FIXTURE
     linkedin.ts      LINKEDIN_SUITE — 12 qa_pairs against LINKEDIN_FIXTURE
-    index.ts         ALL_SUITES = [WORK_SUITE, PERSONAL_SUITE, LINKEDIN_SUITE]
+    hiring.ts        HIRING_SUITE — 12 qa_pairs against HIRING_FIXTURE (real-pattern bilingual hiring inbox)
+    index.ts         ALL_SUITES = [WORK_SUITE, PERSONAL_SUITE, LINKEDIN_SUITE, HIRING_SUITE]
   run.ts             CLI runner: drives a real Claude tool-use loop against each suite's fixture
 ```
 
@@ -48,7 +50,7 @@ The personal suite mirrors realistic personal usage (catch-up/triage, fact recal
 
 Run with `bun run eval` (set `ANTHROPIC_API_KEY` first). Useful flags:
 
-- `--suite work|personal|linkedin` — run one suite (default: all)
+- `--suite work|personal|linkedin|hiring` — run one suite (default: all)
 - `--task <slug>` — run a single qa_pair
 - `--trials 5` — pass^k style; run each task multiple times
 - `--model claude-opus-4-6` — override the default model
@@ -85,7 +87,8 @@ Conversations use Matrix room ids exposed as `conversation_id` (DMs, groups, and
 All tool I/O uses `conversation_id` (Matrix room id) and `message_id` (Matrix event id). Matrix-internal terms like `event_id` / `from` / `next_batch` are not exposed to the agent — see `src/tools/conversations.ts`.
 
 - `whoami` — returns `{ user_id }` for the authenticated Matrix user
-- `list_conversations` — joined chats sorted by latest activity; reads from the in-memory synced store, so it does no HTTP; optional `query` substring filter; default limit 15 (max 50); response: `{ conversations: [{ conversation_id, title, last_activity }], total }`
+- `list_conversations` — joined chats sorted by latest activity; reads from the in-memory synced store, so it does no HTTP; `query` matches room TITLE / TOPIC / id ONLY (not message bodies — for that use `search_messages`); default limit 15 (max 50); response: `{ conversations: [{ conversation_id, title, last_activity }], total }`
+- `search_messages` — case-insensitive substring search across the message bodies of every joined room (or one specific room if `conversation_id` is set). Reads from the in-memory synced live timeline, so it's cheap but bounded by what's currently paged in. Use this BEFORE `read_conversation` whenever the agent is trying to _find_ a chat by something a person said (URL, keyword, name, error code). Each match returns `{ conversation_id, conversation_title, message_id, sender, timestamp, body }`; response also has `total` and `truncated` flags
 - `read_conversation` — oldest-first transcript string with each line formatted `<iso-ts> <sender> [<message_id>]: <text>`; paginate older history with `cursor` from the previous response's `next_cursor`
 - `send_message` — sends plain text; set `reply_to_message_id` (the id printed inside `[…]` in transcripts) to reply to a specific message; returns `{ message_id }`
 
