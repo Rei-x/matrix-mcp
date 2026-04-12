@@ -87,10 +87,10 @@ Conversations use Matrix room ids exposed as `conversation_id` (DMs, groups, and
 All tool I/O uses `conversation_id` (Matrix room id) and `message_id` (Matrix event id). Matrix-internal terms like `event_id` / `from` / `next_batch` are not exposed to the agent — see `src/tools/conversations.ts`.
 
 - `whoami` — returns `{ user_id }` for the authenticated Matrix user
-- `list_conversations` — joined chats sorted by latest activity; reads from the in-memory synced store, so it does no HTTP; `query` matches room TITLE / TOPIC / id ONLY (not message bodies — for that use `search_messages`); default limit 15 (max 50); response: `{ conversations: [{ conversation_id, title, last_activity }], total }`
+- `list_conversations` — joined chats sorted by latest activity; reads from the in-memory synced store, so it does no HTTP; `query` matches room TITLE / TOPIC / id ONLY (not message bodies — for that use `search_messages`); paginate with `offset` (page size 20); response: `{ conversations: [{ conversation_id, title, last_activity }], has_more, total }`
 - `search_messages` — case-insensitive substring search across the message bodies of every joined room (or one specific room if `conversation_id` is set). Reads from the in-memory synced live timeline, so it's cheap but bounded by what's currently paged in. Use this BEFORE `read_conversation` whenever the agent is trying to _find_ a chat by something a person said (URL, keyword, name, error code). Each match returns `{ conversation_id, conversation_title, message_id, sender, timestamp, body }`; response also has `total` and `truncated` flags
-- `read_conversation` — oldest-first transcript string with each line formatted `<iso-ts> <sender> [<message_id>]: <text>`; paginate older history with `cursor` from the previous response's `next_cursor`
-- `send_message` — sends plain text; set `reply_to_message_id` (the id printed inside `[…]` in transcripts) to reply to a specific message; returns `{ message_id }`
+- `read_conversation` — structured `messages` array (oldest first); each message has `sender`, `body`, `type` (text/image/file/video/audio/emote/notice/location), `message_id`, `timestamp`, and optionally `reply_to`; paginate older history with `cursor` from the previous response's `next_cursor`; filter by date with `after`/`before`
+- `send_message` — sends plain text; set `reply_to_message_id` to a `message_id` from `read_conversation` to reply to that message; returns `{ message_id }`
 
 ## Conventions
 

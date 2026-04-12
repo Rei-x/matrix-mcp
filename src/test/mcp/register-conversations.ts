@@ -7,10 +7,10 @@ export const registerConversationTests = (s: McpSuite): void => {
   describe("list_conversations", () => {
     it("should list joined conversations with stable shape", async () => {
       await s.ensureSharedRoom();
-      const lr = await s.callTool("list_conversations", { limit: 5 });
+      const lr = await s.callTool("list_conversations", {});
       expect(lr.total).toBeGreaterThan(0);
       expect(lr.conversations.length).toBeGreaterThanOrEqual(1);
-      expect(lr.conversations.length).toBeLessThanOrEqual(5);
+      expect(lr.conversations.length).toBeLessThanOrEqual(500);
       const first = assertPresent(
         lr.conversations.at(0),
         "unreachable: list_conversations expected at least one conversation"
@@ -18,16 +18,29 @@ export const registerConversationTests = (s: McpSuite): void => {
       expect(first.conversation_id).toMatch(/^!/);
     }, 60_000);
 
-    it("should default limit to 15", async () => {
+    it("should paginate with offset", async () => {
       await s.ensureSharedRoom();
-      const lr = await s.callTool("list_conversations");
-      expect(lr.conversations.length).toBeLessThanOrEqual(15);
+      const lr = await s.callTool("list_conversations", {});
+      if (lr.has_more) {
+        const page2 = await s.callTool("list_conversations", { offset: 20 });
+        expect(page2.conversations.length).toBeGreaterThanOrEqual(1);
+        expect(page2.total).toBe(lr.total);
+      }
+    }, 60_000);
+
+    it("should return empty page when offset exceeds total", async () => {
+      await s.ensureSharedRoom();
+      const lr = await s.callTool("list_conversations", {
+        offset: 999_999,
+      });
+      expect(lr.conversations).toHaveLength(0);
+      expect(lr.has_more).toBe(false);
+      expect(lr.total).toBeGreaterThan(0);
     }, 60_000);
 
     it("should filter by query substring", async () => {
       await s.ensureSharedRoom();
       const lr = await s.callTool("list_conversations", {
-        limit: 20,
         query: s.room.id,
       });
       expect(lr.conversations.length).toBeGreaterThanOrEqual(1);
@@ -40,7 +53,7 @@ export const registerConversationTests = (s: McpSuite): void => {
   });
 
   describe("read_conversation", () => {
-    it("should return a transcript", async () => {
+    it("should return structured messages", async () => {
       await s.ensureSharedRoom();
       const result = await s.callTool("read_conversation", {
         conversation_id: s.room.id,
@@ -48,6 +61,23 @@ export const registerConversationTests = (s: McpSuite): void => {
       });
       expect(result.conversation_id).toBe(s.room.id);
       expect(result.message_count).toBeGreaterThanOrEqual(0);
+      expect(result.messages).toBeInstanceOf(Array);
+      if (result.messages.length > 0) {
+        const [msg] = result.messages;
+        expect(msg).toHaveProperty("body");
+        expect(msg).toHaveProperty("message_id");
+        expect(msg).toHaveProperty("sender");
+        expect(msg).toHaveProperty("timestamp");
+        expect(msg).toHaveProperty("type");
+      }
+    });
+
+    it("should return total message count", async () => {
+      await s.ensureSharedRoom();
+      const result = await s.callTool("read_conversation", {
+        conversation_id: s.room.id,
+      });
+      expect(result.total).toBeGreaterThanOrEqual(result.message_count);
     });
 
     it("should support pagination via cursor/next_cursor", async () => {
@@ -68,17 +98,82 @@ export const registerConversationTests = (s: McpSuite): void => {
       expect(second.conversation_id).toBe(s.room.id);
     });
 
-    it("should always include message ids in transcript lines", async () => {
+    it("should filter messages with after date", async () => {
+      await s.ensureSharedRoom();
+      // Read all messages to get an existing timestamp to split on
+      const all = await s.callTool("read_conversation", {
+        conversation_id: s.room.id,
+        limit: 50,
+      });
+      // Use a far-future date: should return nothing
+      const empty = await s.callTool("read_conversation", {
+        after: "2099-01-01",
+        conversation_id: s.room.id,
+        limit: 50,
+      });
+      expect(empty.message_count).toBe(0);
+      // Use epoch: should return everything
+      const everything = await s.callTool("read_conversation", {
+        after: "2000-01-01",
+        conversation_id: s.room.id,
+        limit: 50,
+      });
+      expect(everything.message_count).toBe(all.message_count);
+    });
+
+    it("should filter messages with before date", async () => {
+      await s.ensureSharedRoom();
+      const all = await s.callTool("read_conversation", {
+        conversation_id: s.room.id,
+        limit: 50,
+      });
+      // Use epoch: should return nothing (before is exclusive)
+      const empty = await s.callTool("read_conversation", {
+        before: "2000-01-01",
+        conversation_id: s.room.id,
+        limit: 50,
+      });
+      expect(empty.message_count).toBe(0);
+      // Use far-future: should return everything
+      const everything = await s.callTool("read_conversation", {
+        before: "2099-01-01",
+        conversation_id: s.room.id,
+        limit: 50,
+      });
+      expect(everything.message_count).toBe(all.message_count);
+    });
+
+    it("should filter messages with both after and before", async () => {
+      await s.ensureSharedRoom();
+      const before = new Date().toISOString();
+      await s.callTool("send_message", {
+        body: "date-range-bracket-test",
+        conversation_id: s.room.id,
+      });
+      const after = new Date().toISOString();
+      // Bracket: after > before → should return nothing
+      const empty = await s.callTool("read_conversation", {
+        after,
+        before,
+        conversation_id: s.room.id,
+        limit: 50,
+      });
+      expect(empty.message_count).toBe(0);
+    });
+
+    it("should include message_id on every message", async () => {
       await s.ensureSharedRoom();
       await s.callTool("send_message", {
-        body: "Message id line test",
+        body: "Message id structured test",
         conversation_id: s.room.id,
       });
       const result = await s.callTool("read_conversation", {
         conversation_id: s.room.id,
         limit: 5,
       });
-      expect(result.transcript).toContain("$");
+      for (const msg of result.messages) {
+        expect(msg.message_id).toMatch(/^\$/);
+      }
     });
   });
 
@@ -92,13 +187,14 @@ export const registerConversationTests = (s: McpSuite): void => {
       expect(result.message_id.length).toBeGreaterThan(0);
     });
 
-    it("should read back sent text in transcript", async () => {
+    it("should read back sent text in messages", async () => {
       await s.ensureSharedRoom();
       const result = await s.callTool("read_conversation", {
         conversation_id: s.room.id,
         limit: 15,
       });
-      expect(result.transcript).toContain("Hello from MCP integration test!");
+      const bodies = result.messages.map((m) => m.body);
+      expect(bodies).toContain("Hello from MCP integration test!");
     });
 
     it("should reply when reply_to_message_id is set", async () => {
@@ -117,7 +213,12 @@ export const registerConversationTests = (s: McpSuite): void => {
         conversation_id: s.room.id,
         limit: 10,
       });
-      expect(read.transcript).toContain("Thread reply body");
+      const replyMsg = read.messages.find(
+        (m) => m.message_id === replyResult.message_id
+      );
+      expect(replyMsg).toBeDefined();
+      expect(replyMsg?.body).toBe("Thread reply body");
+      expect(replyMsg?.reply_to).toBe(sendResult.message_id);
     });
   });
 

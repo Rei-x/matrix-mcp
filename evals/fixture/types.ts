@@ -9,7 +9,9 @@
 export interface FixtureMessage {
   body: string;
   event_id: string;
+  msgtype?: string;
   origin_server_ts: number;
+  reply_to_event_id?: string;
   sender: string;
 }
 

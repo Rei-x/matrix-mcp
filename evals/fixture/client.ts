@@ -23,7 +23,11 @@ const summarize = (room: FixtureRoom): RoomSummary => {
 const toMessageEvent = (m: FixtureMessage) => ({
   body: m.body,
   event_id: m.event_id,
+  msgtype: m.msgtype ?? "m.text",
   origin_server_ts: m.origin_server_ts,
+  ...(m.reply_to_event_id === undefined
+    ? {}
+    : { reply_to_event_id: m.reply_to_event_id }),
   sender: m.sender,
 });
 
@@ -67,6 +71,11 @@ export class FixtureMatrixClient implements MatrixToolClient {
 
   listJoinedRooms(): RoomSummary[] {
     return this.fixture.rooms.map(summarize);
+  }
+
+  countRoomMessages(roomId: string): number {
+    const room = this.fixture.rooms.find((r) => r.room_id === roomId);
+    return room?.messages.length ?? 0;
   }
 
   // eslint-disable-next-line require-await -- conform to MatrixToolClient

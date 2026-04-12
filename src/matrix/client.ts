@@ -18,7 +18,9 @@ export interface RoomSummary {
 export interface MessageEvent {
   body: string;
   event_id: string;
+  msgtype: string;
   origin_server_ts: number;
+  reply_to_event_id?: string;
   sender: string;
 }
 
@@ -64,6 +66,7 @@ export interface CreateRoomOptions {
 export interface MatrixToolClient {
   whoAmI(): { user_id: string };
   listJoinedRooms(): RoomSummary[];
+  countRoomMessages(roomId: string): number;
   readMessages(
     roomId: string,
     options?: { from?: string; limit?: number }
@@ -138,6 +141,29 @@ const summarizeRoom = (room: sdk.Room): RoomSummary => ({
   room_id: room.roomId,
   topic: stateString(room, "m.room.topic", "topic"),
 });
+
+const extractReplyTo = (
+  content: Record<string, unknown>
+): string | undefined => {
+  const relatesTo = content["m.relates_to"];
+  if (
+    relatesTo === null ||
+    relatesTo === undefined ||
+    typeof relatesTo !== "object"
+  ) {
+    return undefined;
+  }
+  const inReplyTo = (relatesTo as Record<string, unknown>)["m.in_reply_to"]; // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- narrowed by typeof check above
+  if (
+    inReplyTo === null ||
+    inReplyTo === undefined ||
+    typeof inReplyTo !== "object"
+  ) {
+    return undefined;
+  }
+  const eventId = (inReplyTo as Record<string, unknown>).event_id; // eslint-disable-line @typescript-eslint/no-unsafe-type-assertion -- narrowed by typeof check above
+  return typeof eventId === "string" ? eventId : undefined;
+};
 
 const formatMatrixError = (err: unknown): Error => {
   if (err instanceof sdk.MatrixError) {
@@ -227,6 +253,19 @@ export class MatrixClient implements MatrixToolClient {
     return this.sdkClient.getRooms().filter(isJoined).map(summarizeRoom);
   }
 
+  countRoomMessages(roomId: string): number {
+    const room = this.sdkClient.getRoom(roomId);
+    if (room === null || !isJoined(room)) {
+      return 0;
+    }
+    return room
+      .getLiveTimeline()
+      .getEvents()
+      .filter(
+        (ev) => ev.getType() === "m.room.message" && messageBodyOf(ev) !== null
+      ).length;
+  }
+
   getRoom(roomId: string): RoomSummary | null {
     const room = this.sdkClient.getRoom(roomId);
     if (room === null || !isJoined(room)) {
@@ -289,14 +328,20 @@ export class MatrixClient implements MatrixToolClient {
     );
     const events: MessageEvent[] = [];
     for (const ev of result.chunk) {
-      const { body } = ev.content as Record<string, unknown>;
+      const content = ev.content as Record<string, unknown>;
+      const { body, msgtype } = content;
       if (typeof body !== "string" || body === "") {
         continue;
       }
+      const replyToEventId = extractReplyTo(content);
       events.push({
         body,
         event_id: ev.event_id,
+        msgtype: typeof msgtype === "string" ? msgtype : "m.text",
         origin_server_ts: ev.origin_server_ts,
+        ...(replyToEventId === undefined
+          ? {}
+          : { reply_to_event_id: replyToEventId }),
         sender: ev.sender,
       });
     }
