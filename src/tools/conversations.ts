@@ -7,7 +7,7 @@ import type {
   RoomSummary,
 } from "@/matrix/client";
 
-const LIST_PAGE_SIZE = 500;
+const LIST_PAGE_SIZE = 20;
 const DEFAULT_READ_LIMIT = 50;
 const MAX_READ_LIMIT = 500;
 const DEFAULT_SEARCH_LIMIT = 50;
@@ -72,6 +72,9 @@ const toTranscriptMessage = (event: MessageEvent) => ({
 const conversationSummarySchema = z.object({
   conversation_id: z.string(),
   last_activity: z.string().nullable(),
+  recent_messages: z
+    .number()
+    .describe("number of messages in the last 7 days (from in-memory state)"),
   title: z.string(),
 });
 
@@ -83,6 +86,7 @@ const toConversationSummary = (room: RoomSummary): ConversationSummary => ({
     room.last_message_ts === null
       ? null
       : new Date(room.last_message_ts).toISOString(),
+  recent_messages: room.recent_message_count,
   title: conversationTitle(room.name),
 });
 

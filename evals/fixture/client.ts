@@ -10,11 +10,17 @@ import type {
 import type { Fixture, FixtureMessage, FixtureRoom } from "./types";
 import { WORK_FIXTURE } from "./work";
 
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
 const summarize = (room: FixtureRoom): RoomSummary => {
   const last = room.messages.at(-1);
+  const cutoff = Date.now() - SEVEN_DAYS_MS;
   return {
     last_message_ts: last?.origin_server_ts ?? null,
     name: room.name,
+    recent_message_count: room.messages.filter(
+      (m) => m.origin_server_ts >= cutoff
+    ).length,
     room_id: room.room_id,
     topic: room.topic,
   };

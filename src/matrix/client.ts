@@ -11,6 +11,7 @@ import { logger as sdkLogger } from "matrix-js-sdk/lib/logger.js";
 export interface RoomSummary {
   last_message_ts: number | null;
   name: string | null;
+  recent_message_count: number;
   room_id: string;
   topic: string | null;
 }
@@ -135,9 +136,25 @@ const messageBodyOf = (ev: sdk.MatrixEvent): string | null => {
   return typeof body === "string" && body !== "" ? body : null;
 };
 
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+const countRecentMessages = (room: sdk.Room): number => {
+  const cutoff = Date.now() - SEVEN_DAYS_MS;
+  return room
+    .getLiveTimeline()
+    .getEvents()
+    .filter(
+      (ev) =>
+        ev.getType() === "m.room.message" &&
+        ev.getTs() >= cutoff &&
+        messageBodyOf(ev) !== null
+    ).length;
+};
+
 const summarizeRoom = (room: sdk.Room): RoomSummary => ({
   last_message_ts: roomLastTsOf(room),
   name: roomNameOf(room),
+  recent_message_count: countRecentMessages(room),
   room_id: room.roomId,
   topic: stateString(room, "m.room.topic", "topic"),
 });
