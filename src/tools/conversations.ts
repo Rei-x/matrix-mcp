@@ -72,6 +72,11 @@ const toTranscriptMessage = (event: MessageEvent) => ({
 const conversationSummarySchema = z.object({
   conversation_id: z.string(),
   last_activity: z.string().nullable(),
+  last_sender_is_me: z
+    .boolean()
+    .describe(
+      "true if the most recent message in this chat was sent by you (useful for spotting threads awaiting a reply from the other side)"
+    ),
   recent_messages: z
     .number()
     .describe("number of messages in the last 7 days (from in-memory state)"),
@@ -86,6 +91,7 @@ const toConversationSummary = (room: RoomSummary): ConversationSummary => ({
     room.last_message_ts === null
       ? null
       : new Date(room.last_message_ts).toISOString(),
+  last_sender_is_me: room.last_sender_is_me,
   recent_messages: room.recent_message_count,
   title: conversationTitle(room.name),
 });
@@ -125,12 +131,31 @@ export const createConversationTools = (client: MatrixToolClient) => ({
         q !== undefined && q !== ""
           ? allRooms.filter((room) => roomMatchesQuery(room, q))
           : allRooms;
-      const sorted = sortByRecentTimestamp(filtered);
+      const afterTs = parseDate(args.after);
+      const dateFiltered =
+        afterTs === null
+          ? filtered
+          : filtered.filter(
+              (r) => r.last_message_ts !== null && r.last_message_ts >= afterTs
+            );
+      const sorted = sortByRecentTimestamp(dateFiltered);
       const page = sorted.slice(offset, offset + LIST_PAGE_SIZE);
-      const hint =
-        page.length === 0 && q !== undefined && q !== ""
-          ? `No conversations match '${args.query ?? ""}'. Try a broader query, or use search_messages to find a chat by message content.`
-          : "Use read_conversation with a conversation_id to read messages, or search_messages to find a chat by something someone said.";
+      let hint: string;
+      if (
+        page.length === 0 &&
+        q !== undefined &&
+        q !== "" &&
+        afterTs !== null
+      ) {
+        hint = `No conversations match '${args.query ?? ""}' with activity at or after ${args.after ?? ""}. Try a broader query, widen \`after\`, or use search_messages to find a chat by message content.`;
+      } else if (page.length === 0 && q !== undefined && q !== "") {
+        hint = `No conversations match '${args.query ?? ""}'. Try a broader query, or use search_messages to find a chat by message content.`;
+      } else if (page.length === 0 && afterTs !== null) {
+        hint = `No conversations have activity at or after ${args.after ?? ""}. Try widening \`after\` or removing it.`;
+      } else {
+        hint =
+          "Use read_conversation with a conversation_id to read messages, or search_messages to find a chat by something someone said.";
+      }
       return {
         conversations: page.map(toConversationSummary),
         has_more: offset + LIST_PAGE_SIZE < sorted.length,
@@ -140,6 +165,12 @@ export const createConversationTools = (client: MatrixToolClient) => ({
     },
     id: "list_conversations",
     inputSchema: z.object({
+      after: z
+        .string()
+        .optional()
+        .describe(
+          "only include conversations whose last activity is at or after this ISO date/datetime"
+        ),
       offset: z
         .number()
         .int()
@@ -307,10 +338,16 @@ export const createConversationTools = (client: MatrixToolClient) => ({
 
   search_messages: createTool({
     description: [
-      "Search the bodies of recent messages across your joined conversations for a case-insensitive substring.",
-      "Use this BEFORE `read_conversation` whenever you want to find a chat by something a person *said* (e.g. 'spotify link', 'CONCURRENTLY', 'Brooklyn Boulders', a URL, a ticket id) — it's far cheaper than reading every conversation one by one.",
+      "Find specific messages across your Matrix chats by content, sender, time range, or any combination.",
+      "Common patterns:",
+      "- 'find what user X said anywhere': pass `sender` (no `query`).",
+      "- 'what did I send recently': pass `sender` for yourself plus `after` (no `query`).",
+      "- 'what did X say in this room': pass `conversation_id` + `sender` — this is THE recommended pattern for finding a specific person's messages in a single chat; prefer it over paginating `read_conversation` backwards looking for them.",
+      "- 'find a chat by something said in it' (URL, keyword, error code, ticket id): pass `query`. Use this BEFORE `read_conversation` so you don't have to read every chat one by one.",
+      '`sender` accepts either a localpart (e.g. `"rei"`) or a full mxid (e.g. `"@rei:matrix.suzuya.dev"`) — both are matched case-insensitively as a substring against the full mxid AND the localpart.',
+      "At least one of `query` or `sender` must be provided. Optional `after`/`before` narrow by timestamp; optional `conversation_id` scopes to a single chat.",
       "Each match returns its `conversation_id` (use with `read_conversation` or `send_message`), the `conversation_title`, the `message_id`, sender, ISO timestamp, and the matching body.",
-      "Scope to one conversation by passing `conversation_id`. Note: search reads from the in-memory synced state, so very old messages that were never paged in may be missed; the `truncated` flag indicates this.",
+      "Note: search reads from the in-memory synced state, so very old messages that were never paged in may be missed; the `truncated` flag indicates this.",
     ].join(" "),
     // eslint-disable-next-line require-await -- Mastra createTool's execute must return a Promise even when the underlying read is synchronous
     execute: async (args) => {
@@ -320,8 +357,11 @@ export const createConversationTools = (client: MatrixToolClient) => ({
         MAX_SEARCH_LIMIT
       );
       const result = client.searchMessages(args.query, {
+        after: parseDate(args.after) ?? undefined,
+        before: parseDate(args.before) ?? undefined,
         conversation_id: args.conversation_id,
         limit,
+        sender: args.sender,
       });
       const matches = result.matches.map((m) => ({
         body: m.body,
@@ -334,7 +374,7 @@ export const createConversationTools = (client: MatrixToolClient) => ({
       const hint =
         matches.length > 0
           ? "Use read_conversation with a conversation_id for full context around a match."
-          : `No messages match '${args.query}'. Try different keywords, or use list_conversations to browse by room title.`;
+          : "No messages match the given filters. Try widening `after`/`before`, removing `sender`, or using different keywords.";
       return {
         hint,
         matches,
@@ -343,29 +383,52 @@ export const createConversationTools = (client: MatrixToolClient) => ({
       };
     },
     id: "search_messages",
-    inputSchema: z.object({
-      conversation_id: z
-        .string()
-        .optional()
-        .describe(
-          "optional: scope the search to a single conversation (Matrix room id from `list_conversations`)"
-        ),
-      limit: z
-        .number()
-        .int()
-        .min(1)
-        .max(MAX_SEARCH_LIMIT)
-        .optional()
-        .describe(
-          `max matches to return (default ${DEFAULT_SEARCH_LIMIT}, max ${MAX_SEARCH_LIMIT})`
-        ),
-      query: z
-        .string()
-        .min(1)
-        .describe(
-          "case-insensitive substring to find anywhere in a message body (e.g. a name, URL, error code, keyword)"
-        ),
-    }),
+    inputSchema: z
+      .object({
+        after: z
+          .string()
+          .optional()
+          .describe(
+            "only include messages at or after this ISO date/datetime (e.g. 2025-03-01)"
+          ),
+        before: z
+          .string()
+          .optional()
+          .describe(
+            "only include messages before this ISO date/datetime (e.g. 2025-04-01)"
+          ),
+        conversation_id: z
+          .string()
+          .optional()
+          .describe(
+            "optional: scope the search to a single conversation (Matrix room id from `list_conversations`)"
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_SEARCH_LIMIT)
+          .optional()
+          .describe(
+            `max matches to return (default ${DEFAULT_SEARCH_LIMIT}, max ${MAX_SEARCH_LIMIT})`
+          ),
+        query: z
+          .string()
+          .optional()
+          .describe(
+            "case-insensitive substring; optional when `sender` is set"
+          ),
+        sender: z
+          .string()
+          .optional()
+          .describe(
+            "case-insensitive substring matched against the sender's full mxid AND its localpart, e.g. 'rei' or '@rei:matrix.suzuya.dev'"
+          ),
+      })
+      .refine(
+        (v) => (v.query ?? "").length > 0 || (v.sender ?? "").length > 0,
+        { message: "Provide at least one of `query` or `sender`." }
+      ),
     mcp: {
       annotations: {
         idempotentHint: true,

@@ -10,6 +10,7 @@ import { logger as sdkLogger } from "matrix-js-sdk/lib/logger.js";
 
 export interface RoomSummary {
   last_message_ts: number | null;
+  last_sender_is_me: boolean;
   name: string | null;
   recent_message_count: number;
   room_id: string;
@@ -73,8 +74,14 @@ export interface MatrixToolClient {
     options?: { from?: string; limit?: number }
   ): Promise<MessagePage>;
   searchMessages(
-    query: string,
-    options?: { conversation_id?: string; limit?: number }
+    query: string | undefined,
+    options?: {
+      after?: number;
+      before?: number;
+      conversation_id?: string;
+      limit?: number;
+      sender?: string;
+    }
   ): MessageSearchResult;
   sendText(roomId: string, body: string): Promise<SendEventResponse>;
   sendReply(
@@ -151,8 +158,67 @@ const countRecentMessages = (room: sdk.Room): number => {
     ).length;
 };
 
-const summarizeRoom = (room: sdk.Room): RoomSummary => ({
+const senderMatches = (mxid: string, senderNeedle: string): boolean => {
+  const mxidLower = mxid.toLowerCase();
+  if (mxidLower.includes(senderNeedle)) {
+    return true;
+  }
+  const localpart = /^@([^:]+):/.exec(mxid)?.[1]?.toLowerCase() ?? "";
+  return localpart.includes(senderNeedle);
+};
+
+interface SearchFilters {
+  after?: number;
+  before?: number;
+  needle: string;
+  senderNeedle: string;
+}
+
+const eventPassesFilters = (
+  ev: sdk.MatrixEvent,
+  body: string,
+  filters: SearchFilters
+): boolean => {
+  if (
+    filters.senderNeedle !== "" &&
+    !senderMatches(ev.getSender() ?? "", filters.senderNeedle)
+  ) {
+    return false;
+  }
+  const ts = ev.getTs();
+  if (filters.after !== undefined && ts < filters.after) {
+    return false;
+  }
+  if (filters.before !== undefined && ts >= filters.before) {
+    return false;
+  }
+  if (filters.needle !== "" && !body.toLowerCase().includes(filters.needle)) {
+    return false;
+  }
+  return true;
+};
+
+const lastMessageSenderOf = (room: sdk.Room): string | null => {
+  const events = room.getLiveTimeline().getEvents();
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const ev = events[i];
+    if (ev === undefined) {
+      continue;
+    }
+    if (ev.getType() !== "m.room.message") {
+      continue;
+    }
+    if (messageBodyOf(ev) === null) {
+      continue;
+    }
+    return ev.getSender() ?? null;
+  }
+  return null;
+};
+
+const summarizeRoom = (room: sdk.Room, myUserId: string): RoomSummary => ({
   last_message_ts: roomLastTsOf(room),
+  last_sender_is_me: lastMessageSenderOf(room) === myUserId,
   name: roomNameOf(room),
   recent_message_count: countRecentMessages(room),
   room_id: room.roomId,
@@ -267,7 +333,11 @@ export class MatrixClient implements MatrixToolClient {
   // --- Rooms (read from synced in-memory state) ---
 
   listJoinedRooms(): RoomSummary[] {
-    return this.sdkClient.getRooms().filter(isJoined).map(summarizeRoom);
+    const myUserId = this.sdkClient.getSafeUserId();
+    return this.sdkClient
+      .getRooms()
+      .filter(isJoined)
+      .map((room) => summarizeRoom(room, myUserId));
   }
 
   countRoomMessages(roomId: string): number {
@@ -288,7 +358,7 @@ export class MatrixClient implements MatrixToolClient {
     if (room === null || !isJoined(room)) {
       return null;
     }
-    return summarizeRoom(room);
+    return summarizeRoom(room, this.sdkClient.getSafeUserId());
   }
 
   /**
@@ -379,14 +449,27 @@ export class MatrixClient implements MatrixToolClient {
    * `truncated` flag is true if any room hit its in-memory limit.
    */
   searchMessages(
-    query: string,
-    options: { conversation_id?: string; limit?: number } = {}
+    query: string | undefined,
+    options: {
+      after?: number;
+      before?: number;
+      conversation_id?: string;
+      limit?: number;
+      sender?: string;
+    } = {}
   ): MessageSearchResult {
     const limit = options.limit ?? 20;
-    const needle = query.toLowerCase();
-    if (needle === "") {
+    const needle = query === undefined ? "" : query.toLowerCase();
+    const senderNeedle = options.sender?.toLowerCase() ?? "";
+    if (needle === "" && senderNeedle === "") {
       return { matches: [], total: 0, truncated: false };
     }
+    const filters: SearchFilters = {
+      after: options.after,
+      before: options.before,
+      needle,
+      senderNeedle,
+    };
     const rooms =
       options.conversation_id === undefined
         ? this.sdkClient.getRooms().filter(isJoined)
@@ -413,7 +496,7 @@ export class MatrixClient implements MatrixToolClient {
         if (body === null) {
           continue;
         }
-        if (!body.toLowerCase().includes(needle)) {
+        if (!eventPassesFilters(ev, body, filters)) {
           continue;
         }
         total += 1;

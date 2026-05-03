@@ -12,11 +12,50 @@ import { WORK_FIXTURE } from "./work";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
-const summarize = (room: FixtureRoom): RoomSummary => {
+const senderMatches = (mxid: string, senderNeedle: string): boolean => {
+  const mxidLower = mxid.toLowerCase();
+  if (mxidLower.includes(senderNeedle)) {
+    return true;
+  }
+  const localpart = /^@([^:]+):/.exec(mxid)?.[1]?.toLowerCase() ?? "";
+  return localpart.includes(senderNeedle);
+};
+
+interface SearchFilters {
+  after?: number;
+  before?: number;
+  needle: string;
+  senderNeedle: string;
+}
+
+const messagePassesFilters = (
+  m: FixtureMessage,
+  filters: SearchFilters
+): boolean => {
+  if (
+    filters.senderNeedle !== "" &&
+    !senderMatches(m.sender, filters.senderNeedle)
+  ) {
+    return false;
+  }
+  if (filters.after !== undefined && m.origin_server_ts < filters.after) {
+    return false;
+  }
+  if (filters.before !== undefined && m.origin_server_ts >= filters.before) {
+    return false;
+  }
+  if (filters.needle !== "" && !m.body.toLowerCase().includes(filters.needle)) {
+    return false;
+  }
+  return true;
+};
+
+const summarize = (room: FixtureRoom, myUserId: string): RoomSummary => {
   const last = room.messages.at(-1);
   const cutoff = Date.now() - SEVEN_DAYS_MS;
   return {
     last_message_ts: last?.origin_server_ts ?? null,
+    last_sender_is_me: last?.sender === myUserId,
     name: room.name,
     recent_message_count: room.messages.filter(
       (m) => m.origin_server_ts >= cutoff
@@ -76,7 +115,9 @@ export class FixtureMatrixClient implements MatrixToolClient {
   }
 
   listJoinedRooms(): RoomSummary[] {
-    return this.fixture.rooms.map(summarize);
+    return this.fixture.rooms.map((room) =>
+      summarize(room, this.fixture.user_id)
+    );
   }
 
   countRoomMessages(roomId: string): number {
@@ -113,14 +154,27 @@ export class FixtureMatrixClient implements MatrixToolClient {
   }
 
   searchMessages(
-    query: string,
-    options: { conversation_id?: string; limit?: number } = {}
+    query: string | undefined,
+    options: {
+      after?: number;
+      before?: number;
+      conversation_id?: string;
+      limit?: number;
+      sender?: string;
+    } = {}
   ): MessageSearchResult {
     const limit = options.limit ?? 20;
-    const needle = query.toLowerCase();
-    if (needle === "") {
+    const needle = query === undefined ? "" : query.toLowerCase();
+    const senderNeedle = options.sender?.toLowerCase() ?? "";
+    if (needle === "" && senderNeedle === "") {
       return { matches: [], total: 0, truncated: false };
     }
+    const filters: SearchFilters = {
+      after: options.after,
+      before: options.before,
+      needle,
+      senderNeedle,
+    };
     const rooms =
       options.conversation_id === undefined
         ? this.fixture.rooms
@@ -137,7 +191,7 @@ export class FixtureMatrixClient implements MatrixToolClient {
     let total = 0;
     for (const room of sortedRooms) {
       for (const m of room.messages) {
-        if (!m.body.toLowerCase().includes(needle)) {
+        if (!messagePassesFilters(m, filters)) {
           continue;
         }
         total += 1;
