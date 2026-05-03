@@ -17,7 +17,17 @@ export interface RoomSummary {
   topic: string | null;
 }
 
+export interface MessageAttachment {
+  dimensions?: { height: number; width: number };
+  duration_ms?: number;
+  encrypted: boolean;
+  filename?: string;
+  mimetype: string;
+  size_bytes?: number;
+}
+
 export interface MessageEvent {
+  attachment?: MessageAttachment;
   body: string;
   event_id: string;
   msgtype: string;
@@ -25,6 +35,10 @@ export interface MessageEvent {
   reply_to_event_id?: string;
   sender: string;
 }
+
+export type ReadMediaResult =
+  | { data: Uint8Array; mimetype: string; type: "image" }
+  | { text: string; type: "description" };
 
 export interface MessagePage {
   events: MessageEvent[];
@@ -36,6 +50,7 @@ export interface SendEventResponse {
 }
 
 export interface MessageMatch {
+  attachment?: MessageAttachment;
   body: string;
   conversation_id: string;
   conversation_title: string | null;
@@ -69,6 +84,11 @@ export interface MatrixToolClient {
   whoAmI(): { user_id: string };
   listJoinedRooms(): RoomSummary[];
   countRoomMessages(roomId: string): number;
+  readMedia(
+    roomId: string,
+    eventId: string,
+    options?: { variant?: "thumbnail" | "full" }
+  ): Promise<ReadMediaResult>;
   readMessages(
     roomId: string,
     options?: { from?: string; limit?: number }
@@ -145,6 +165,27 @@ const messageBodyOf = (ev: sdk.MatrixEvent): string | null => {
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
+const THUMBNAIL_W = 512;
+const THUMBNAIL_H = 512;
+const MAX_MEDIA_BYTES = 10 * 1024 * 1024;
+const FETCH_TIMEOUT_MS = 30_000;
+
+export const MSGTYPE = {
+  AUDIO: "m.audio",
+  FILE: "m.file",
+  IMAGE: "m.image",
+  TEXT: "m.text",
+  VIDEO: "m.video",
+} as const;
+export type Msgtype = (typeof MSGTYPE)[keyof typeof MSGTYPE];
+
+const MEDIA_MSGTYPES: ReadonlySet<string> = new Set([
+  MSGTYPE.AUDIO,
+  MSGTYPE.FILE,
+  MSGTYPE.IMAGE,
+  MSGTYPE.VIDEO,
+]);
+
 const countRecentMessages = (room: sdk.Room): number => {
   const cutoff = Date.now() - SEVEN_DAYS_MS;
   return room
@@ -158,7 +199,8 @@ const countRecentMessages = (room: sdk.Room): number => {
     ).length;
 };
 
-const senderMatches = (mxid: string, senderNeedle: string): boolean => {
+/** Case-insensitive substring match against the full mxid AND its localpart. */
+export const senderMatches = (mxid: string, senderNeedle: string): boolean => {
   const mxidLower = mxid.toLowerCase();
   if (mxidLower.includes(senderNeedle)) {
     return true;
@@ -225,6 +267,111 @@ const summarizeRoom = (room: sdk.Room, myUserId: string): RoomSummary => ({
   topic: stateString(room, "m.room.topic", "topic"),
 });
 
+const nonEmptyString = (value: unknown): string | undefined =>
+  typeof value === "string" && value !== "" ? value : undefined;
+
+const numberField = (value: unknown): number | undefined =>
+  typeof value === "number" ? value : undefined;
+
+const mimetypeOf = (info: Record<string, unknown>): string =>
+  nonEmptyString(info.mimetype) ?? "application/octet-stream";
+
+const filenameOf = (
+  content: Record<string, unknown>,
+  fallback?: string
+): string | undefined =>
+  nonEmptyString(content.filename) ?? nonEmptyString(content.body) ?? fallback;
+
+const buildAttachment = (
+  content: Record<string, unknown>,
+  msgtype: string
+): MessageAttachment | undefined => {
+  if (!MEDIA_MSGTYPES.has(msgtype)) {
+    return undefined;
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- content.info is sender-supplied JSON; we read fields with typeof guards
+  const info = (content.info ?? {}) as Record<string, unknown>;
+  const w = numberField(info.w);
+  const h = numberField(info.h);
+  const size = numberField(info.size);
+  const duration = numberField(info.duration);
+  const filename = filenameOf(content);
+  return {
+    ...(w === undefined || h === undefined
+      ? {}
+      : { dimensions: { height: h, width: w } }),
+    ...(duration === undefined ? {} : { duration_ms: duration }),
+    encrypted: content.file !== undefined,
+    ...(filename === undefined ? {} : { filename }),
+    mimetype: mimetypeOf(info),
+    ...(size === undefined ? {} : { size_bytes: size }),
+  };
+};
+
+const KIB = 1024;
+const MIB = KIB * 1024;
+const GIB = MIB * 1024;
+
+const formatHumanSize = (bytes: number): string => {
+  if (bytes >= GIB) {
+    return `${(bytes / GIB).toFixed(1)} GB`;
+  }
+  if (bytes >= MIB) {
+    return `${(bytes / MIB).toFixed(1)} MB`;
+  }
+  if (bytes >= KIB) {
+    return `${(bytes / KIB).toFixed(1)} KB`;
+  }
+  return `${bytes.toString(10)} B`;
+};
+
+const validateMediaContent = (
+  content: Record<string, unknown>,
+  msgtype: string
+): string => {
+  if (!MEDIA_MSGTYPES.has(msgtype)) {
+    throw new Error("Matrix API error: event is not a media message");
+  }
+  if (content.file !== undefined) {
+    throw new Error(
+      "Matrix API error: encrypted attachments not supported in this build"
+    );
+  }
+  const mxcUrl = content.url;
+  if (typeof mxcUrl !== "string") {
+    throw new TypeError("Matrix API error: media event missing url");
+  }
+  return mxcUrl;
+};
+
+/**
+ * Format the user-facing description we return for `m.file`/`m.audio`/`m.video`
+ * attachments — this build can't render their bytes inline. Shared with the
+ * fixture so the wording can't drift.
+ */
+export const describeNonImageAttachment = (parts: {
+  filename?: string;
+  mimetype: string;
+  sizeBytes?: number;
+}): string => {
+  const name = parts.filename ?? "(unnamed)";
+  const size =
+    parts.sizeBytes === undefined
+      ? "size unknown"
+      : formatHumanSize(parts.sizeBytes);
+  return `Attachment: ${name} (${parts.mimetype}, ${size}). This build can only render m.image as an image; other types are referenced but not downloaded.`;
+};
+
+const describeNonImageContent = (content: Record<string, unknown>): string => {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- content.info is sender-supplied JSON; we read fields with typeof guards
+  const info = (content.info ?? {}) as Record<string, unknown>;
+  return describeNonImageAttachment({
+    filename: filenameOf(content),
+    mimetype: mimetypeOf(info),
+    sizeBytes: numberField(info.size),
+  });
+};
+
 const extractReplyTo = (
   content: Record<string, unknown>
 ): string | undefined => {
@@ -272,10 +419,12 @@ const wrap = async <T>(promise: Promise<T>): Promise<T> => {
 // --- Client ---
 
 export class MatrixClient implements MatrixToolClient {
+  private readonly accessToken: string;
   private readonly sdkClient: sdk.MatrixClient;
   private startPromise: Promise<void> | null = null;
 
   constructor(baseUrl: string, accessToken: string) {
+    this.accessToken = accessToken;
     this.sdkClient = sdk.createClient({
       accessToken,
       baseUrl,
@@ -420,11 +569,15 @@ export class MatrixClient implements MatrixToolClient {
       if (typeof body !== "string" || body === "") {
         continue;
       }
+      const normalizedMsgtype =
+        typeof msgtype === "string" ? msgtype : MSGTYPE.TEXT;
       const replyToEventId = extractReplyTo(content);
+      const attachment = buildAttachment(content, normalizedMsgtype);
       events.push({
+        ...(attachment === undefined ? {} : { attachment }),
         body,
         event_id: ev.event_id,
-        msgtype: typeof msgtype === "string" ? msgtype : "m.text",
+        msgtype: normalizedMsgtype,
         origin_server_ts: ev.origin_server_ts,
         ...(replyToEventId === undefined
           ? {}
@@ -501,7 +654,14 @@ export class MatrixClient implements MatrixToolClient {
         }
         total += 1;
         if (matches.length < limit) {
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- matrix-js-sdk getContent() is typed as `any`
+          const evContent = ev.getContent() as Record<string, unknown>;
+          const attachment = buildAttachment(
+            evContent,
+            nonEmptyString(evContent.msgtype) ?? MSGTYPE.TEXT
+          );
           matches.push({
+            ...(attachment === undefined ? {} : { attachment }),
             body,
             conversation_id: room.roomId,
             conversation_title: title,
@@ -513,6 +673,106 @@ export class MatrixClient implements MatrixToolClient {
       }
     }
     return { matches, total, truncated };
+  }
+
+  /**
+   * Fetch a media attachment from a Matrix room. For `m.image`, downloads the
+   * bytes (thumbnail by default) and returns them. For `m.file` / `m.audio` /
+   * `m.video`, returns a textual description — this build doesn't render
+   * non-image media. Encrypted attachments (`content.file`) are rejected.
+   */
+  async readMedia(
+    roomId: string,
+    eventId: string,
+    options: { variant?: "thumbnail" | "full" } = {}
+  ): Promise<ReadMediaResult> {
+    const event = this.findRoomEvent(roomId, eventId);
+    const content = event.getContent();
+    const msgtype = nonEmptyString(content.msgtype) ?? "";
+    const mxcUrl = validateMediaContent(content, msgtype);
+    if (msgtype !== MSGTYPE.IMAGE) {
+      return {
+        text: describeNonImageContent(content),
+        type: "description",
+      };
+    }
+    const httpUrl = this.resolveMediaUrl(
+      mxcUrl,
+      options.variant ?? "thumbnail"
+    );
+    const { buffer, headerMime } = await this.downloadMedia(httpUrl);
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- content.info is sender-supplied JSON; we read fields with typeof guards
+    const info = (content.info ?? {}) as Record<string, unknown>;
+    const mimetype =
+      nonEmptyString(info.mimetype) ?? headerMime ?? "application/octet-stream";
+    return { data: new Uint8Array(buffer), mimetype, type: "image" };
+  }
+
+  private findRoomEvent(roomId: string, eventId: string): sdk.MatrixEvent {
+    const room = this.sdkClient.getRoom(roomId);
+    if (room === null || !isJoined(room)) {
+      throw new Error("Matrix API error: room not joined or not found");
+    }
+    for (const ts of room.getTimelineSets()) {
+      const event = ts.findEventById(eventId);
+      if (event !== undefined) {
+        return event;
+      }
+    }
+    throw new Error("Matrix API error: event not found in synced state");
+  }
+
+  private resolveMediaUrl(
+    mxcUrl: string,
+    variant: "thumbnail" | "full"
+  ): string {
+    const isThumbnail = variant === "thumbnail";
+    const httpUrl = this.sdkClient.mxcUrlToHttp(
+      mxcUrl,
+      isThumbnail ? THUMBNAIL_W : undefined,
+      isThumbnail ? THUMBNAIL_H : undefined,
+      isThumbnail ? "scale" : undefined,
+      false,
+      true,
+      true
+    );
+    if (httpUrl === null) {
+      throw new Error("Matrix API error: failed to resolve mxc url");
+    }
+    return httpUrl;
+  }
+
+  private async downloadMedia(
+    httpUrl: string
+  ): Promise<{ buffer: ArrayBuffer; headerMime: string | undefined }> {
+    const response = await fetch(httpUrl, {
+      headers: { Authorization: `Bearer ${this.accessToken}` },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Matrix API error ${response.status}: media download failed`
+      );
+    }
+    const lenHeader = response.headers.get("content-length");
+    const declaredLen =
+      lenHeader === null ? null : Number.parseInt(lenHeader, 10);
+    if (
+      declaredLen !== null &&
+      !Number.isNaN(declaredLen) &&
+      declaredLen > MAX_MEDIA_BYTES
+    ) {
+      throw new Error("Matrix API error: media exceeds size limit");
+    }
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength > MAX_MEDIA_BYTES) {
+      throw new Error("Matrix API error: media exceeds size limit");
+    }
+    const headerMime = response.headers
+      .get("content-type")
+      ?.split(";")[0]
+      ?.trim();
+    return { buffer, headerMime: nonEmptyString(headerMime) };
   }
 
   async sendText(roomId: string, body: string): Promise<SendEventResponse> {

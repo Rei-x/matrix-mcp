@@ -2,7 +2,6 @@ import { timingSafeEqual } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { MCPServer } from "@mastra/mcp";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -10,7 +9,7 @@ import { cors } from "hono/cors";
 
 import type { AppEnv } from "@/env";
 import type { MatrixToolClient } from "@/matrix/client";
-import { createAllTools } from "@/tools";
+import { buildServer } from "@/mcp/server";
 
 /** Constant-time comparison for path tokens (mitigates timing leaks). */
 const timingSafeEqualString = (a: string, b: string): boolean => {
@@ -32,16 +31,6 @@ const FAVICON_ICO_PATH = path.join(
 const mcpAuthSecretConfigured = (c: Context<AppEnv>): boolean => {
   const t = c.env.MCP_AUTH_TOKEN;
   return t !== undefined && t !== "";
-};
-
-export const createMCPServer = (client: MatrixToolClient) => {
-  const tools = createAllTools(client);
-  return new MCPServer({
-    id: "mcp-server-matrix",
-    name: "mcp-server-matrix",
-    tools,
-    version: "1.0.0",
-  });
 };
 
 export const createApp = (client: MatrixToolClient) => {
@@ -88,10 +77,9 @@ export const createApp = (client: MatrixToolClient) => {
 
   const mcpHandler = async (c: Context<AppEnv>) => {
     // The underlying MCP SDK Server can only be connected to one transport at
-    // a time, so build a fresh server (and tool wiring) per request. Tool
-    // construction is cheap since the Matrix client is already synced.
-    const mcpServer = createMCPServer(client);
-    const sdkServer = mcpServer.getServer();
+    // a time, so build a fresh server per request. Tool construction is cheap
+    // since the Matrix client is already synced.
+    const sdkServer = buildServer(client);
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: true,
     });

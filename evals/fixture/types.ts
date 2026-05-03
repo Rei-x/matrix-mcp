@@ -6,7 +6,10 @@
  * which one its qa_pairs run against.
  */
 
+import type { MessageAttachment } from "@/matrix/client";
+
 export interface FixtureMessage {
+  attachment?: MessageAttachment;
   body: string;
   event_id: string;
   msgtype?: string;

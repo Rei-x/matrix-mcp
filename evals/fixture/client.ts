@@ -1,8 +1,14 @@
+import {
+  describeNonImageAttachment,
+  MSGTYPE,
+  senderMatches,
+} from "@/matrix/client";
 import type {
   MatrixToolClient,
   MessageMatch,
   MessagePage,
   MessageSearchResult,
+  ReadMediaResult,
   RoomSummary,
   SendEventResponse,
 } from "@/matrix/client";
@@ -12,14 +18,17 @@ import { WORK_FIXTURE } from "./work";
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
-const senderMatches = (mxid: string, senderNeedle: string): boolean => {
-  const mxidLower = mxid.toLowerCase();
-  if (mxidLower.includes(senderNeedle)) {
-    return true;
-  }
-  const localpart = /^@([^:]+):/.exec(mxid)?.[1]?.toLowerCase() ?? "";
-  return localpart.includes(senderNeedle);
-};
+// 1×1 transparent PNG (67 bytes). Lets fixture-backed tests exercise the
+// image-content path without bundling real image assets. Stored as a hex
+// string to dodge the formatter/linter argument over hex literal casing.
+const TINY_PNG_BYTES = new Uint8Array(
+  Buffer.from(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489000000" +
+      "0d49444154789c6300010000050001" +
+      "0d0a2db40000000049454e44ae426082",
+    "hex"
+  )
+);
 
 interface SearchFilters {
   after?: number;
@@ -66,6 +75,7 @@ const summarize = (room: FixtureRoom, myUserId: string): RoomSummary => {
 };
 
 const toMessageEvent = (m: FixtureMessage) => ({
+  ...(m.attachment === undefined ? {} : { attachment: m.attachment }),
   body: m.body,
   event_id: m.event_id,
   msgtype: m.msgtype ?? "m.text",
@@ -197,6 +207,7 @@ export class FixtureMatrixClient implements MatrixToolClient {
         total += 1;
         if (matches.length < limit) {
           matches.push({
+            ...(m.attachment === undefined ? {} : { attachment: m.attachment }),
             body: m.body,
             conversation_id: room.room_id,
             conversation_title: room.name,
@@ -208,6 +219,41 @@ export class FixtureMatrixClient implements MatrixToolClient {
       }
     }
     return { matches, total, truncated: false };
+  }
+
+  // eslint-disable-next-line require-await -- conform to MatrixToolClient
+  async readMedia(roomId: string, eventId: string): Promise<ReadMediaResult> {
+    const room = this.fixture.rooms.find((r) => r.room_id === roomId);
+    if (room === undefined) {
+      throw new Error("Matrix API error: room not joined or not found");
+    }
+    const m = room.messages.find((mm) => mm.event_id === eventId);
+    if (m === undefined) {
+      throw new Error("Matrix API error: event not found in synced state");
+    }
+    if (m.attachment === undefined) {
+      throw new Error("Matrix API error: event is not a media message");
+    }
+    if (m.attachment.encrypted) {
+      throw new Error(
+        "Matrix API error: encrypted attachments not supported in this build"
+      );
+    }
+    if (m.msgtype !== MSGTYPE.IMAGE) {
+      return {
+        text: describeNonImageAttachment({
+          filename: m.attachment.filename,
+          mimetype: m.attachment.mimetype,
+          sizeBytes: m.attachment.size_bytes,
+        }),
+        type: "description",
+      };
+    }
+    return {
+      data: TINY_PNG_BYTES,
+      mimetype: m.attachment.mimetype,
+      type: "image",
+    };
   }
 
   // eslint-disable-next-line require-await -- read-only fixture; refuse all writes

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { createApp } from "@/app";
 import type { AppEnv } from "@/env";
 import { MatrixClient } from "@/matrix/client";
-import type { createAllTools } from "@/tools";
+import type { ALL_TOOLS } from "@/tools";
 
 export const assertPresent = <T>(value: T | undefined, message: string): T => {
   if (value === undefined) {
@@ -44,34 +44,18 @@ export const mcpJsonRpcSchema = z.object({
   jsonrpc: z.string(),
 });
 
-type ToolMap = ReturnType<typeof createAllTools>;
-export type ToolName = Extract<keyof ToolMap, string>;
+type ToolByName = {
+  [T in (typeof ALL_TOOLS)[number] as T["name"]]: T;
+};
+export type ToolName = keyof ToolByName;
 
-type SchemaInputType<S> = S extends {
-  readonly "~standard": {
-    readonly types?: { readonly input: infer I } | undefined;
-  };
-}
-  ? I
-  : never;
-type SchemaOutputType<S> = S extends {
-  readonly "~standard": {
-    readonly types?: { readonly output: infer O } | undefined;
-  };
-}
-  ? O
-  : never;
-
-export type ToolInput<N extends ToolName> = ToolMap[N] extends {
-  inputSchema?: infer S;
-}
-  ? SchemaInputType<NonNullable<S>>
-  : never;
-export type ToolOutput<N extends ToolName> = ToolMap[N] extends {
-  outputSchema?: infer S;
-}
-  ? SchemaOutputType<NonNullable<S>>
-  : never;
+export type ToolInput<N extends ToolName> = z.infer<
+  ToolByName[N]["inputSchema"]
+>;
+export type ToolOutput<N extends ToolName> =
+  NonNullable<ToolByName[N]["outputSchema"]> extends z.ZodType
+    ? z.infer<NonNullable<ToolByName[N]["outputSchema"]>>
+    : unknown;
 
 type CallToolArgs<N extends ToolName> =
   Record<string, never> extends ToolInput<N>
@@ -250,24 +234,9 @@ export const createMcpSuite = (testEnv: AppEnv["Bindings"]): McpSuite => {
   // Guards `cleanupStaleTestRooms` to run exactly once per suite lifecycle,
   // right after the first `ensureSharedRoom` call.
   let staleCleanupRun = false;
-  const mcpRequest = async (body: Record<string, unknown>) => {
-    const response = await app.request(
-      "/mcp",
-      {
-        body: JSON.stringify(body),
-        headers: {
-          Accept: "application/json, text/event-stream",
-          "Content-Type": "application/json",
-        },
-        method: "POST",
-      },
-      testEnv
-    );
-    expect(response.status).toBe(200);
-    const json: unknown = await response.json();
-    return jsonrpcResponseSchema.parse(json);
-  };
-  const mcpRequestRaw = async (body: Record<string, unknown>) => {
+  const mcpRequestRaw = async (
+    body: Record<string, unknown>
+  ): Promise<unknown> => {
     const response = await app.request(
       "/mcp",
       {
@@ -283,32 +252,25 @@ export const createMcpSuite = (testEnv: AppEnv["Bindings"]): McpSuite => {
     expect(response.status).toBe(200);
     return response.json();
   };
+  const mcpRequest = async (body: Record<string, unknown>) =>
+    jsonrpcResponseSchema.parse(await mcpRequestRaw(body));
   const callRawEnvelope = async <N extends ToolName>(
     name: N,
-    args: ToolInput<N> | undefined
+    ...args: CallToolArgs<N>
   ): Promise<z.infer<typeof toolCallResultSchema>> => {
     const rpc = await mcpRequest({
       id: Math.floor(Math.random() * 10_000),
       jsonrpc: "2.0",
       method: "tools/call",
-      params: { arguments: args ?? {}, name },
+      params: { arguments: args[0] ?? {}, name },
     });
     return toolCallResultSchema.parse(rpc.result);
   };
   const invokeTool = async <N extends ToolName>(
     name: N,
     ...args: CallToolArgs<N>
-  ): Promise<ToolOutput<N>> => {
-    const envelope = await callRawEnvelope(name, args[0]);
-    return parseToolPayload<N>(envelope);
-  };
-  const invokeToolRaw = async <N extends ToolName>(
-    name: N,
-    ...args: CallToolArgs<N>
-  ): Promise<z.infer<typeof toolCallResultSchema>> => {
-    const result = await callRawEnvelope(name, args[0]);
-    return result;
-  };
+  ): Promise<ToolOutput<N>> =>
+    parseToolPayload<N>(await callRawEnvelope(name, ...args));
   const ensureSharedRoom = async (): Promise<void> => {
     await matrixClient.start();
     if (!staleCleanupRun) {
@@ -340,7 +302,7 @@ export const createMcpSuite = (testEnv: AppEnv["Bindings"]): McpSuite => {
   return {
     app,
     callTool: invokeTool,
-    callToolRaw: invokeToolRaw,
+    callToolRaw: callRawEnvelope,
     cleanupSharedRoom,
     ensureSharedRoom,
     matrixClient,

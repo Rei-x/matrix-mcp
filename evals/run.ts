@@ -26,9 +26,10 @@ import type {
   ToolResultBlockParam,
   ToolUseBlock,
 } from "@anthropic-ai/sdk/resources/messages";
-import { standardSchemaToJSONSchema } from "@mastra/schema-compat/schema";
 
-import { createAllTools } from "@/tools";
+import type { MatrixToolClient } from "@/matrix/client";
+import { callTool, toMcpTool } from "@/mcp/tool";
+import { ALL_TOOLS } from "@/tools";
 
 import { FixtureMatrixClient } from "./fixture/client";
 import { ALL_SUITES } from "./suites";
@@ -176,35 +177,37 @@ const SYSTEM_PROMPT = [
   "Do not call write tools (e.g. send_message) — they are blocked in eval mode and will return an error.",
 ].join("\n");
 
-type ToolExecutor = (input: unknown) => Promise<unknown>;
+// Module-level: tool definitions are frozen, JSON-Schema generation is the
+// expensive part. Compute once and reuse across every suite.
+const ANTHROPIC_TOOL_DEFS: Tool[] = ALL_TOOLS.map((tool) => {
+  const mcpTool = toMcpTool(tool);
+  return {
+    description: tool.description,
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- our zod inputs are z.object so the JSON schema has type:object, matching Tool.InputSchema
+    input_schema: mcpTool.inputSchema as Tool.InputSchema,
+    name: tool.name,
+  };
+});
 
-const buildAnthropicTools = (
-  toolMap: ReturnType<typeof createAllTools>
-): { definitions: Tool[]; executors: Map<string, ToolExecutor> } => {
-  const definitions: Tool[] = [];
+type ToolExecutor = (input: unknown) => Promise<string>;
+
+const buildExecutors = (
+  client: MatrixToolClient
+): Map<string, ToolExecutor> => {
   const executors = new Map<string, ToolExecutor>();
-  for (const tool of Object.values(toolMap)) {
-    const { execute, inputSchema } = tool;
-    if (inputSchema === undefined || execute === undefined) {
-      throw new Error(
-        `tool ${tool.id} is missing inputSchema or execute — required for eval`
-      );
-    }
-    const jsonSchema = standardSchemaToJSONSchema(inputSchema, { io: "input" });
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- our zod inputs are all z.object so the JSON schema has type:object
-    const anthropicInputSchema = jsonSchema as Tool.InputSchema;
-    definitions.push({
-      description: tool.description,
-      input_schema: anthropicInputSchema,
-      name: tool.id,
-    });
-    executors.set(tool.id, async (input) => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- model-supplied input is `unknown`; the tool's own schema validates it inside execute
-      const out = await execute(input as never, {});
-      return out;
+  for (const tool of ALL_TOOLS) {
+    executors.set(tool.name, async (input) => {
+      const result = await callTool(tool, input ?? {}, { client });
+      const textBlock = result.content.find((c) => c.type === "text");
+      const text = textBlock?.text ?? JSON.stringify(result);
+      if (result.isError === true) {
+        // eslint-disable-next-line unicorn/prefer-type-error -- isError is a flag, not a typeof check
+        throw new Error(text);
+      }
+      return text;
     });
   }
-  return { definitions, executors };
+  return executors;
 };
 
 interface AgentRunResult {
@@ -288,9 +291,9 @@ const runOneTrial = async (
         continue;
       }
       try {
-        const result = await exec(block.input);
+        const text = await exec(block.input);
         toolResults.push({
-          content: JSON.stringify(result),
+          content: text,
           tool_use_id: block.id,
           type: "tool_result",
         });
@@ -421,8 +424,7 @@ const runSuite = async (
   suite: EvalSuite
 ): Promise<SuiteReport> => {
   const fixture = new FixtureMatrixClient(suite.fixture);
-  const toolMap = createAllTools(fixture);
-  const { definitions, executors } = buildAnthropicTools(toolMap);
+  const executors = buildExecutors(fixture);
 
   printSuiteHeader(suite, suite.questions.length);
 
@@ -431,7 +433,13 @@ const runSuite = async (
     const trials: TrialResult[] = [];
     for (let t = 0; t < flags.trials; t += 1) {
       const start = Date.now();
-      const run = await runOneTrial(client, flags, definitions, executors, qa);
+      const run = await runOneTrial(
+        client,
+        flags,
+        ANTHROPIC_TOOL_DEFS,
+        executors,
+        qa
+      );
       const duration = Date.now() - start;
       const correct = run.answer === qa.answer;
       const trial: TrialResult = {
