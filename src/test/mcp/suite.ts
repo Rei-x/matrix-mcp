@@ -243,6 +243,7 @@ export const createMcpSuite = (testEnv: AppEnv["Bindings"]): McpSuite => {
         body: JSON.stringify(body),
         headers: {
           Accept: "application/json, text/event-stream",
+          Authorization: `Bearer ${testEnv.MCP_AUTH_TOKEN}`,
           "Content-Type": "application/json",
         },
         method: "POST",
@@ -317,7 +318,7 @@ export const testBindingsFromEnv = (): AppEnv["Bindings"] => {
   const {
     MATRIX_ACCESS_TOKEN = "",
     MATRIX_BASE_URL = "",
-    MCP_AUTH_TOKEN,
+    MCP_AUTH_TOKEN = "integration-test-backend-secret",
   } = process.env;
   return {
     MATRIX_ACCESS_TOKEN,

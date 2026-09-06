@@ -654,8 +654,7 @@ export class MatrixClient implements MatrixToolClient {
         }
         total += 1;
         if (matches.length < limit) {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- matrix-js-sdk getContent() is typed as `any`
-          const evContent = ev.getContent() as Record<string, unknown>;
+          const evContent = ev.getContent();
           const attachment = buildAttachment(
             evContent,
             nonEmptyString(evContent.msgtype) ?? MSGTYPE.TEXT

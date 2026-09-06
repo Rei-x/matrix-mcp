@@ -9,10 +9,12 @@ const getNodeBindings = (): AppEnv["Bindings"] => {
     MATRIX_ACCESS_TOKEN = "",
     MATRIX_BASE_URL = "",
     MCP_AUTH_TOKEN,
+    MCP_DEV_MODE,
   } = process.env;
   return {
     MATRIX_ACCESS_TOKEN,
     MATRIX_BASE_URL,
+    MCP_DEV_MODE,
     ...(MCP_AUTH_TOKEN !== undefined && MCP_AUTH_TOKEN !== ""
       ? { MCP_AUTH_TOKEN }
       : {}),
@@ -26,6 +28,12 @@ const requireConfig = (bindings: AppEnv["Bindings"]) => {
   }
   if (!bindings.MATRIX_ACCESS_TOKEN) {
     missing.push("MATRIX_ACCESS_TOKEN");
+  }
+  if (
+    (bindings.MCP_AUTH_TOKEN === undefined || bindings.MCP_AUTH_TOKEN === "") &&
+    bindings.MCP_DEV_MODE !== "true"
+  ) {
+    missing.push("MCP_AUTH_TOKEN");
   }
   if (missing.length > 0) {
     console.error(

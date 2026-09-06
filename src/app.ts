@@ -28,18 +28,13 @@ const FAVICON_ICO_PATH = path.join(
   "favicon.ico"
 );
 
-const mcpAuthSecretConfigured = (c: Context<AppEnv>): boolean => {
-  const t = c.env.MCP_AUTH_TOKEN;
-  return t !== undefined && t !== "";
-};
-
 export const createApp = (client: MatrixToolClient) => {
   const app = new Hono<AppEnv>();
 
   app.get("/health", (c): Response => {
     try {
-      const me = client.whoAmI();
-      return c.text(`ok ${me.user_id}`, 200);
+      client.whoAmI();
+      return c.text("ok", 200);
     } catch {
       return c.text("matrix unavailable", 503);
     }
@@ -87,35 +82,26 @@ export const createApp = (client: MatrixToolClient) => {
     return transport.handleRequest(c.req.raw);
   };
 
-  // With MCP_AUTH_TOKEN set: MCP only at `/:token/mcp` (token must match the secret).
-  // Without it: `/mcp` and `/` for local dev.
-  app.all("/:token/mcp", (c): Response | Promise<Response> => {
-    if (!mcpAuthSecretConfigured(c)) {
-      return c.notFound();
-    }
-    const expected = c.env.MCP_AUTH_TOKEN;
-    if (expected === undefined || expected === "") {
-      return c.notFound();
-    }
-    if (!timingSafeEqualString(c.req.param("token"), expected)) {
-      return c.notFound();
-    }
-    return mcpHandler(c);
-  });
-
   app.all("/mcp", (c): Response | Promise<Response> => {
-    if (mcpAuthSecretConfigured(c)) {
-      return c.notFound();
+    const expected = c.env.MCP_AUTH_TOKEN;
+    const authorization = c.req.header("Authorization");
+    const supplied =
+      authorization?.startsWith("Bearer ") === true
+        ? authorization.slice(7)
+        : undefined;
+    const authenticated =
+      expected !== undefined &&
+      expected !== "" &&
+      supplied !== undefined &&
+      supplied !== "" &&
+      timingSafeEqualString(supplied, expected);
+    const localDev =
+      c.env.MCP_DEV_MODE === "true" &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(new URL(c.req.url).hostname);
+    if (!authenticated && !localDev) {
+      return c.json({ error: "unauthorized" }, 401);
     }
     return mcpHandler(c);
   });
-
-  app.all("/", (c): Response | Promise<Response> => {
-    if (mcpAuthSecretConfigured(c)) {
-      return c.notFound();
-    }
-    return mcpHandler(c);
-  });
-
   return app;
 };

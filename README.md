@@ -1,67 +1,22 @@
-# MCP Server Template
+# Matrix MCP
 
-A production-ready MCP (Model Context Protocol) server template built with [Mastra](https://mastra.ai), [Hono](https://hono.dev), and Node.js.
+Stateless MCP HTTP server backed by a synced Matrix client. Start with
+`bun install` and `bun run start`. Configure `MATRIX_BASE_URL`,
+`MATRIX_ACCESS_TOKEN`, and `MCP_AUTH_TOKEN` in the environment.
 
-## Quick Start
+The `/mcp` backend requires `Authorization: Bearer <MCP_AUTH_TOKEN>` and fails
+closed when the secret is missing. Secret-in-URL routes and `/` are removed.
+`/health` exposes only health status.
 
-```bash
-bun install
-cp .env.example .env
-bun run dev
-```
+Interactive clients connect through a separate OAuth gateway. This backend
+has no knowledge of the identity provider or other MCP services.
 
-The server starts at `http://localhost:3000`. MCP endpoint is at `/api/mcp/main/mcp`.
+For local development, `MCP_DEV_MODE=true` permits anonymous requests only
+on localhost/loopback hostnames. Do not enable it in production.
 
-## Project Structure
+- `bun run check`: formatting, lint, and type checks.
+- `bunx vitest run src/test/auth.test.ts`: isolated authorization tests, no Matrix network calls.
+- `bun run test`: integration tests against the configured homeserver; creates
+  private test rooms, posts test messages, and performs cleanup.
 
-```
-src/
-  server.ts                    - Entry point: Hono app + HTTP server
-  mastra/
-    index.ts                   - Mastra instance configuration
-    mcp-servers/
-      index.ts                 - MCPServer definition with tools
-    tools/
-      index.ts                 - Tool barrel export
-      echo.ts                  - Example echo tool
-      calculator.ts            - Example calculator tool
-  test/
-    server.test.ts             - Integration tests via MCPClient
-```
-
-## Adding a Tool
-
-1. Create `src/mastra/tools/my-tool.ts`:
-
-```typescript
-import { createTool } from "@mastra/core/tools";
-import { z } from "zod";
-
-export const myTool = createTool({
-  id: "my-tool",
-  description: "Description of what the tool does",
-  inputSchema: z.object({
-    input: z.string().describe("Description of input"),
-  }),
-  execute: async ({ input }) => {
-    return { result: input };
-  },
-});
-```
-
-2. Export from `src/mastra/tools/index.ts`
-3. Register in `src/mastra/mcp-servers/index.ts`
-
-## Scripts
-
-| Command         | Description                      |
-| --------------- | -------------------------------- |
-| `bun run dev`   | Start dev server with watch mode |
-| `bun run start` | Start production server          |
-| `bun run test`  | Run tests                        |
-| `bun run check` | Lint and format check            |
-| `bun run fix`   | Auto-fix lint and format         |
-
-## Deployment
-
-The server runs on Node.js via `@hono/node-server`. Deploy anywhere Node.js is supported.
+Tool definitions live in `src/tools`; `src/mcp/server.ts` owns MCP dispatch.
